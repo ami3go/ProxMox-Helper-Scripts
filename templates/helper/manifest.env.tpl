@@ -1,0 +1,12 @@
+# Static helper metadata. Keep values literal; command substitution is not allowed.
+HELPER_ID="__HELPER_ID__"
+HELPER_NAME="__HELPER_NAME__"
+HELPER_CATEGORY="__HELPER_CATEGORY__"
+HELPER_VERSION="0.1.0"
+HELPER_DESCRIPTION="__HELPER_DESCRIPTION__"
+HELPER_ENTRYPOINT="install.sh"
+HELPER_TARGET="proxmox-host"
+HELPER_TAGS="__HELPER_CATEGORY__"
+HELPER_MAINTAINER="Repository maintainers"
+HELPER_DOCS="README.md"
+HELPER_STANDALONE="false"

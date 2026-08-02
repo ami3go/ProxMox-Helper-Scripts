@@ -1,0 +1,75 @@
+name: Bug report
+description: Report a reproducible launcher, helper, provisioning, packaging, or documentation problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Remove credentials, passwords, tokens, private keys, public addresses, and sensitive infrastructure details from all logs.
+  - type: input
+    id: repository-version
+    attributes:
+      label: Repository version
+      placeholder: 2.2.0
+    validations:
+      required: true
+  - type: input
+    id: helper
+    attributes:
+      label: Helper ID and version
+      placeholder: ai-dev-lxc 2.2.0, or framework/launcher
+    validations:
+      required: true
+  - type: input
+    id: proxmox
+    attributes:
+      label: Proxmox VE version
+      placeholder: Output of pveversion
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected area
+      options:
+        - Central launcher or registry
+        - Helper installation
+        - Helper update or repair
+        - Helper scaffold
+        - Validation or tests
+        - Release packaging
+        - GitHub Pages or publishing
+        - Documentation
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, passwords, tokens, private keys, and sensitive network details.
+          required: true
+        - label: I searched existing issues before opening this report.
+          required: true

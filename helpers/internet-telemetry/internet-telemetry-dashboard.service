@@ -1,0 +1,15 @@
+[Unit]
+Description=Internet telemetry collector and web dashboard
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/internet-telemetry/network_telemetry_dashboard.py
+Restart=on-failure
+RestartSec=5
+ProtectHome=true
+ReadWritePaths=/etc/internet-telemetry /var/log/internet-telemetry
+
+[Install]
+WantedBy=multi-user.target

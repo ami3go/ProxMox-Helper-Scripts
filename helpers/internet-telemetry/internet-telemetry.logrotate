@@ -1,0 +1,16 @@
+# Log rotation for internet-telemetry.
+# The application already writes date-stamped files (telemetry_YYYY-MM-DD.jsonl,
+# summary_YYYY-MM-DD.csv); logrotate handles retention and compression.
+/var/log/internet-telemetry/*.jsonl /var/log/internet-telemetry/*.csv {
+    daily
+    rotate 30
+    maxage 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+
+# Event JSON files in events/ are pruned by the application itself
+# (files older than 30 days are removed once per day).

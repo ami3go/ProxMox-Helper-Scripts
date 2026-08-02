@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="An extensible, manifest-driven collection of interactive helper scripts for Proxmox VE.">
+  <meta name="theme-color" content="#0b1020">
+  <title>Proxmox Helper Scripts</title>
+  <link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="container nav-wrap">
+      <a class="brand" href="#top" aria-label="Proxmox Helper Scripts home">
+        <img src="assets/logo.svg" alt="" width="38" height="38">
+        <span>Proxmox Helper Scripts</span>
+      </a>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">Menu</button>
+      <nav id="site-nav" class="site-nav" aria-label="Primary navigation">
+        <a href="#catalog">Catalog</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#contribute">Add a helper</a>
+        <a href="#security">Security</a>
+        <a href="https://github.com/YOUR_GITHUB_USERNAME/proxmox-helper-scripts">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+    <section id="top" class="hero">
+      <div class="container hero-grid">
+        <div>
+          <p class="eyebrow">Proxmox VE · Dynamic catalog · Reusable infrastructure</p>
+          <h1>One repository for many guided Proxmox helpers.</h1>
+          <p class="hero-copy">Add independent LXC, VM, storage, networking, backup, monitoring, or development helpers without duplicating the launcher, TUI framework, validation, documentation, CI, and release pipeline.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="https://github.com/YOUR_GITHUB_USERNAME/proxmox-helper-scripts">Clone repository</a>
+            <a class="button secondary" href="#catalog">Browse helpers</a>
+          </div>
+          <div class="command-card" aria-label="Launcher command">
+            <code id="install-command">./bin/proxmox-helper-scripts</code>
+            <button class="copy-button" type="button" data-copy-target="install-command">Copy</button>
+          </div>
+          <p class="checksum-link">Version 2.2.0 · Manifest-driven · MIT licensed</p>
+        </div>
+
+        <div class="terminal-demo" aria-label="Example helper catalog">
+          <div class="terminal-bar"><span></span><span></span><span></span><strong>Proxmox node</strong></div>
+          <pre><code>┌──────────────────────────────────────────┐
+│       PROXMOX HELPER SCRIPTS v2.2.0      │
+├──────────────────────────────────────────┤
+│  development                             │
+│    AI Development LXC            v2.2.0  │
+│                                          │
+│  New helpers are discovered from:        │
+│  helpers/&lt;helper-id&gt;/         │
+└──────────────────────────────────────────┘
+
+$ ./bin/proxmox-helper-scripts list
+$ ./bin/proxmox-helper-scripts run ai-dev-lxc</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section class="stats" aria-label="Project summary">
+      <div class="container stats-grid">
+        <div><strong id="helper-count">1</strong><span>Registered helpers</span></div>
+        <div><strong>Dynamic</strong><span>Manifest discovery</span></div>
+        <div><strong>TUI</strong><span>Central launcher</span></div>
+        <div><strong>CI</strong><span>Catalog and release validation</span></div>
+      </div>
+    </section>
+
+    <section id="catalog" class="section">
+      <div class="container">
+        <p class="eyebrow">Helper catalog</p>
+        <h2>Independent helpers, one consistent entry point.</h2>
+        <div id="helper-catalog" class="catalog-grid" aria-live="polite">
+          <article class="card"><h3>Loading catalog…</h3><p>Reading generated helper metadata.</p></article>
+        </div>
+        <p id="catalog-error" class="note" hidden>The generated catalog could not be loaded. Open the repository’s <code>HELPERS.md</code> file instead.</p>
+      </div>
+    </section>
+
+    <section id="architecture" class="section muted">
+      <div class="container">
+        <p class="eyebrow">Repository architecture</p>
+        <h2>Provisioning stays local; infrastructure stays shared.</h2>
+        <div class="card-grid">
+          <article class="card"><h3>Per-helper ownership</h3><p>Each helper owns one stable folder under <code>helpers/&lt;id&gt;/</code>, including its manifest, installer, files, modules, templates, assets, documentation, and tests.</p></article>
+          <article class="card"><h3>Static registry</h3><p>Literal metadata is validated without execution, then used by the launcher, catalog generator, Pages site, and release packager.</p></article>
+          <article class="card"><h3>Shared primitives</h3><p>Generic root checks, messages, menus, discovery, and execution live under <code>lib/</code>. Product-specific logic does not.</p></article>
+          <article class="card"><h3>Central launcher</h3><p>The same command lists, inspects, validates, and runs every registered helper from a TUI or normal CLI.</p></article>
+          <article class="card"><h3>Generated documentation</h3><p><code>HELPERS.md</code> and <code>docs/data/helpers.json</code> are generated from manifests, preventing catalog drift.</p></article>
+          <article class="card"><h3>Scalable releases</h3><p>Tagged releases include the full repository, complete folder bundles for every helper, and optional standalone scripts for self-contained helpers.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="contribute" class="section">
+      <div class="container split">
+        <div>
+          <p class="eyebrow">Add a helper</p>
+          <h2>Generate the standard structure in one command.</h2>
+          <ol class="steps">
+            <li><span>1</span><div><strong>Create the skeleton</strong><p>Choose an ID, display name, category, and one-line description.</p></div></li>
+            <li><span>2</span><div><strong>Implement safely</strong><p>Add conservative defaults, target checks, logging, repair behavior, and explicit confirmation before destructive actions.</p></div></li>
+            <li><span>3</span><div><strong>Document and test</strong><p>Describe prerequisites, changes, credentials, exposed ports, and rollback. Add non-destructive CI tests.</p></div></li>
+            <li><span>4</span><div><strong>Regenerate and validate</strong><p>The helper then appears automatically in the launcher, catalog, Pages site, and release package.</p></div></li>
+          </ol>
+        </div>
+        <div class="code-panel">
+          <div class="code-panel-header"><span>Repository checkout</span><button class="copy-button" type="button" data-copy-target="new-helper-command">Copy</button></div>
+          <pre><code id="new-helper-command">./scripts/new-helper.sh \
+  --id backup-server \
+  --name "Backup Server LXC" \
+  --category storage \
+  --description "Create a backup server container."
+
+./scripts/generate-catalog.py
+./scripts/validate.sh</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="security" class="section dark-section">
+      <div class="container split">
+        <div>
+          <p class="eyebrow">Review standard</p>
+          <h2>Helpers execute privileged infrastructure changes.</h2>
+          <p>Every helper must validate its execution target, protect secrets, document side effects, use conservative exposure defaults, and provide a rollback or removal path. Review helper source before execution.</p>
+          <p>An LXC shares the Proxmox host kernel. Use a full VM for untrusted workloads, custom kernels, or stronger isolation boundaries.</p>
+        </div>
+        <ul class="check-list">
+          <li>Static, non-executable manifest metadata</li>
+          <li>Explicit destructive-action confirmation</li>
+          <li>Predictable rerun and repair behavior</li>
+          <li>No secrets in logs or repository state</li>
+          <li>Documented ports, files, and services</li>
+          <li>Tested rollback guidance</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="container callout">
+        <div><p class="eyebrow">First included helper</p><h2>Deploy the headless AI Development LXC.</h2></div>
+        <div class="hero-actions">
+          <a class="button primary" href="downloads/ai-dev-lxc-bundle-v2.2.0.zip">Download complete bundle</a>
+          <a class="button secondary" href="downloads/ai-dev-lxc.sh">Standalone script</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container footer-grid">
+      <p>Proxmox Helper Scripts · MIT License</p>
+      <div><a href="https://github.com/YOUR_GITHUB_USERNAME/proxmox-helper-scripts">Source</a><a href="https://github.com/YOUR_GITHUB_USERNAME/proxmox-helper-scripts/issues">Issues</a><a href="HELPERS.md">Catalog</a></div>
+    </div>
+  </footer>
+  <script src="app.js"></script>
+</body>
+</html>

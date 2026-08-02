@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: MIT
+set -Eeuo pipefail
+
+readonly LAUNCHER_VERSION="2.2.0"
+ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=../lib/common.sh
+source "$ROOT_DIR/lib/common.sh"
+# shellcheck source=../lib/tui.sh
+source "$ROOT_DIR/lib/tui.sh"
+# shellcheck source=../lib/registry.sh
+source "$ROOT_DIR/lib/registry.sh"
+
+usage() {
+  cat <<'USAGE'
+Proxmox Helper Scripts
+
+Usage:
+  proxmox-helper-scripts                        Open the interactive helper catalog
+  proxmox-helper-scripts categories             List registered categories
+  proxmox-helper-scripts list [CATEGORY]        List all helpers or one category
+  proxmox-helper-scripts search TERM            Search IDs, names, categories, tags, and descriptions
+  proxmox-helper-scripts info ID                Show helper metadata
+  proxmox-helper-scripts run ID [ARGS]          Execute a helper
+  proxmox-helper-scripts validate               Validate registered manifests
+  proxmox-helper-scripts version                Show launcher version
+  proxmox-helper-scripts help                   Show this help
+USAGE
+}
+
+list_categories() {
+  local category count
+  printf '%-20s %s\n' CATEGORY HELPERS
+  printf '%-20s %s\n' '--------------------' '-------'
+  while IFS= read -r category; do
+    count=$(ph_registry_list_tsv "$category" | wc -l)
+    printf '%-20s %d\n' "$category" "$count"
+  done < <(ph_registry_categories)
+}
+
+list_helpers() {
+  local category_filter=${1:-}
+  printf '%-22s %-30s %-16s %-10s %s\n' ID NAME CATEGORY VERSION DESCRIPTION
+  printf '%-22s %-30s %-16s %-10s %s\n' '----------------------' '------------------------------' '----------------' '----------' '-----------'
+  while IFS=$'\t' read -r id name category version description; do
+    printf '%-22s %-30s %-16s %-10s %s\n' "$id" "$name" "$category" "$version" "$description"
+  done < <(ph_registry_list_tsv "$category_filter")
+}
+
+search_helpers() {
+  local term=${1:-}
+  [[ -n $term ]] || ph_die 'Search term is required.'
+  local normalized=${term,,} found=0 manifest haystack
+  printf '%-22s %-30s %-16s %-10s %s\n' ID NAME CATEGORY VERSION DESCRIPTION
+  printf '%-22s %-30s %-16s %-10s %s\n' '----------------------' '------------------------------' '----------------' '----------' '-----------'
+  while IFS= read -r manifest; do
+    ph_manifest_load "$manifest"
+    ph_manifest_validate_loaded || continue
+    haystack="${HELPER_ID,,} ${HELPER_NAME,,} ${HELPER_CATEGORY,,} ${HELPER_TAGS,,} ${HELPER_DESCRIPTION,,}"
+    [[ $haystack == *"$normalized"* ]] || continue
+    printf '%-22s %-30s %-16s %-10s %s\n' \
+      "$HELPER_ID" "$HELPER_NAME" "$HELPER_CATEGORY" "$HELPER_VERSION" "$HELPER_DESCRIPTION"
+    found=1
+  done < <(ph_registry_manifests)
+  ((found == 1)) || return 1
+}
+
+show_info() {
+  local id=${1:-}
+  [[ -n $id ]] || ph_die 'Helper ID is required.'
+  ph_registry_find "$id" || ph_die "Unknown helper: $id"
+  cat <<EOF_INFO
+ID:          $HELPER_ID
+Name:        $HELPER_NAME
+Category:    $HELPER_CATEGORY
+Version:     $HELPER_VERSION
+Target:      $HELPER_TARGET
+Description: $HELPER_DESCRIPTION
+Tags:        ${HELPER_TAGS:-none}
+Maintainer:  ${HELPER_MAINTAINER:-not specified}
+Entrypoint:  ${PH_HELPER_DIR#$ROOT_DIR/}/$HELPER_ENTRYPOINT
+Documentation: ${HELPER_DOCS:-README.md}
+Standalone release: ${HELPER_STANDALONE:-false}
+EOF_INFO
+}
+
+validate_registry() {
+  local count=0 manifest
+  while IFS= read -r manifest; do
+    ph_manifest_load "$manifest"
+    ph_manifest_validate_loaded || ph_die "Invalid manifest: ${manifest#$ROOT_DIR/}"
+    ((count+=1))
+  done < <(ph_registry_manifests)
+  ((count > 0)) || ph_die 'No helpers were found.'
+  printf 'Validated %d helper manifest(s).\n' "$count"
+}
+
+select_category() {
+  local -a items=()
+  local category count
+  while IFS= read -r category; do
+    count=$(ph_registry_list_tsv "$category" | wc -l)
+    items+=("$category" "$count helper(s)")
+  done < <(ph_registry_categories)
+  items+=("__all" "Show all helpers")
+  items+=("__exit" "Exit")
+  ph_tui_menu "Proxmox Helper Scripts v$LAUNCHER_VERSION" \
+    'Select a category:' "${items[@]}"
+}
+
+select_helper() {
+  local category_filter=${1:-}
+  local -a items=()
+  local id name category version description
+  while IFS=$'\t' read -r id name category version description; do
+    items+=("$id" "$name v$version")
+  done < <(ph_registry_list_tsv "$category_filter")
+  items+=("__back" "Back to categories")
+  ph_tui_menu "${category_filter:-All helpers}" \
+    'Select a helper to inspect or run:' "${items[@]}"
+}
+
+interactive_catalog() {
+  local category choice details
+  while true; do
+    category=$(select_category) || exit 0
+    [[ $category == __exit ]] && exit 0
+    [[ $category == __all ]] && category=""
+
+    while true; do
+      choice=$(select_helper "$category") || break
+      [[ $choice == __back ]] && break
+      ph_registry_find "$choice" || ph_die "Unknown helper: $choice"
+      details="Name: $HELPER_NAME
+Category: $HELPER_CATEGORY
+Version: $HELPER_VERSION
+Target: $HELPER_TARGET
+
+$HELPER_DESCRIPTION
+
+Run this helper now?"
+      if ph_tui_available; then
+        if whiptail --title "$HELPER_NAME" --yesno "$details" 20 84; then
+          ph_registry_run "$choice"
+        fi
+      else
+        printf '\n%s\n\n' "$details"
+        if ph_confirm 'Run this helper now?' no; then
+          ph_registry_run "$choice"
+        fi
+      fi
+    done
+  done
+}
+
+main() {
+  local command=${1:-menu}
+  case $command in
+    menu)
+      interactive_catalog
+      ;;
+    categories)
+      list_categories
+      ;;
+    list)
+      shift
+      list_helpers "${1:-}"
+      ;;
+    search)
+      shift
+      search_helpers "${1:-}" || ph_die 'No matching helpers found.'
+      ;;
+    info)
+      shift
+      show_info "${1:-}"
+      ;;
+    run)
+      shift
+      local id=${1:-}
+      [[ -n $id ]] || ph_die 'Helper ID is required.'
+      shift
+      ph_registry_run "$id" "$@"
+      ;;
+    validate)
+      validate_registry
+      ;;
+    version|--version|-V)
+      printf '%s\n' "$LAUNCHER_VERSION"
+      ;;
+    help|--help|-h)
+      usage
+      ;;
+    *)
+      ph_die "Unknown command: $command. Use 'help' for usage."
+      ;;
+  esac
+}
+
+main "$@"
