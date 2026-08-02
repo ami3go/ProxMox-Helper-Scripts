@@ -81,10 +81,10 @@ done
 printf 'Checking helper bundle export...\n'
 export_dir=$(mktemp -d)
 ./scripts/export-helpers.sh "$export_dir"
-[[ -f $export_dir/ai-dev-lxc-bundle-v2.2.0.zip ]] || fail 'AI helper ZIP bundle was not exported.'
-[[ -f $export_dir/ai-dev-lxc-bundle-v2.2.0.tar.gz ]] || fail 'AI helper TAR.GZ bundle was not exported.'
+[[ -f $export_dir/ai-dev-lxc-bundle-v2.2.1.zip ]] || fail 'AI helper ZIP bundle was not exported.'
+[[ -f $export_dir/ai-dev-lxc-bundle-v2.2.1.tar.gz ]] || fail 'AI helper TAR.GZ bundle was not exported.'
 [[ -f $export_dir/ai-dev-lxc.sh ]] || fail 'AI standalone helper was not exported.'
-unzip -l "$export_dir/ai-dev-lxc-bundle-v2.2.0.zip" | grep -Fq 'ai-dev-lxc/files/README.md' || fail 'Helper bundle does not contain resource files.'
+unzip -l "$export_dir/ai-dev-lxc-bundle-v2.2.1.zip" | grep -Fq 'ai-dev-lxc/files/README.md' || fail 'Helper bundle does not contain resource files.'
 
 for file in docs/index.html docs/styles.css docs/app.js docs/404.html docs/.nojekyll docs/data/helpers.json; do
   [[ -f $file ]] || fail "Missing Pages file: $file"

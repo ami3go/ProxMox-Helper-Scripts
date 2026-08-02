@@ -6,5 +6,5 @@ MANIFEST="$ROOT_DIR/helpers/ai-dev-lxc/manifest.env"
 [[ -x $ENTRY ]]
 [[ -f $MANIFEST ]]
 bash -n "$ENTRY"
-grep -Fq 'readonly SCRIPT_VERSION="2.2.0"' "$ENTRY"
+grep -Fq 'readonly SCRIPT_VERSION="2.2.1"' "$ENTRY"
 printf 'AI Development LXC smoke test passed.\n'

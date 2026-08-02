@@ -11,7 +11,7 @@ set -Eeuo pipefail
 shopt -s inherit_errexit 2>/dev/null || true
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_VERSION="2.2.0"
+readonly SCRIPT_VERSION="2.2.1"
 readonly BACKTITLE="AI Development LXC • Proxmox VE"
 readonly STATE_DIR="/etc/claude-dev-lxc"
 readonly LOG_DIR="/var/log/claude-dev-lxc"
@@ -25,6 +25,7 @@ readonly DEFAULT_PORT="8080"
 
 LOG_FILE=""
 LAST_ERROR=""
+PROVISION_WARNING=""
 
 # Runtime configuration
 CTID=""
@@ -800,7 +801,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get full-upgrade -y
 apt-get install -y --no-install-recommends \
-  sudo openssh-server ca-certificates curl wget git gh \
+  sudo openssh-server ca-certificates curl wget git gh gnupg \
   build-essential python3 python3-dev python3-pip python3-venv pipx \
   jq ripgrep fd-find tmux unzip zip rsync shellcheck openssl \
   make cmake pkg-config less nano vim bash-completion locales xz-utils
@@ -945,39 +946,117 @@ install_node22() {
   npm --version
 }
 
+install_claude_code() {
+  local deb_arch fingerprint
+  local expected_fingerprint="31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE"
+  local key_file="/etc/apt/keyrings/claude-code.asc"
+  local source_file="/etc/apt/sources.list.d/claude-code.list"
+
+  deb_arch=$(dpkg --print-architecture)
+  case "$deb_arch" in
+    amd64)
+      if ! grep -qw avx /proc/cpuinfo; then
+        echo "ERROR: Claude Code requires AVX on x86-64, but AVX is not exposed by this Proxmox node CPU." >&2
+        echo "CPU: $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | xargs || true)" >&2
+        echo "There is currently no native-binary workaround for a missing AVX instruction set." >&2
+        return 1
+      fi
+      ;;
+    arm64) ;;
+    *)
+      echo "ERROR: Claude Code is unsupported by this helper on Debian architecture: $deb_arch" >&2
+      return 1
+      ;;
+  esac
+
+  echo 'Checking access to the Claude Code download service...'
+  curl -fsSL --retry 3 --retry-delay 2 \
+    https://downloads.claude.ai/claude-code-releases/latest \
+    -o /tmp/claude-code-latest-version
+  printf 'Available Claude Code release: %s\n' "$(tr -d '[:space:]' </tmp/claude-code-latest-version)"
+  rm -f /tmp/claude-code-latest-version
+
+  install -d -m 0755 /etc/apt/keyrings
+  curl -fsSL --retry 3 --retry-delay 2 \
+    https://downloads.claude.ai/keys/claude-code.asc \
+    -o "$key_file"
+
+  fingerprint=$(gpg --batch --show-keys --with-colons "$key_file" 2>/dev/null \
+    | awk -F: '$1 == "fpr" {print toupper($10); exit}')
+  if [[ "$fingerprint" != "$expected_fingerprint" ]]; then
+    echo "ERROR: Anthropic signing-key fingerprint verification failed." >&2
+    echo "Expected: $expected_fingerprint" >&2
+    echo "Received: ${fingerprint:-none}" >&2
+    rm -f "$key_file"
+    return 1
+  fi
+
+  printf '%s\n' \
+    'deb [signed-by=/etc/apt/keyrings/claude-code.asc] https://downloads.claude.ai/claude-code/apt/stable stable main' \
+    >"$source_file"
+
+  apt-get update
+  apt-get install -y --no-install-recommends claude-code
+  run_as_dev claude --version
+}
+
+FAILED_AGENTS=()
+install_agent() {
+  local agent_id=$1
+  local agent_name=$2
+  shift 2
+  local agent_log="/var/log/ai-agent-${agent_id}-install.log"
+  local rc=0
+
+  : >"$agent_log"
+  echo "Installing/updating $agent_name..."
+  set +e
+  ( set -Eeuo pipefail; "$@" ) > >(tee -a "$agent_log") 2>&1
+  rc=$?
+  set -e
+  if ((rc == 0)); then
+    echo "$agent_name installation completed."
+  else
+    FAILED_AGENTS+=("$agent_id")
+    echo "ERROR: $agent_name installation failed with exit code $rc." | tee -a "$agent_log" >&2
+    echo "Detailed log: $agent_log" >&2
+    tail -n 60 "$agent_log" >&2 || true
+  fi
+  return 0
+}
+
 if has_agent gemini || has_agent copilot; then
   install_node22
   run_as_dev npm config set prefix "$DEV_HOME/.local/npm"
 fi
 
 if has_agent claude; then
-  echo 'Installing/updating Claude Code...'
-  run_as_dev_shell 'set -o pipefail; curl -fsSL https://claude.ai/install.sh | bash'
+  install_agent claude 'Claude Code' install_claude_code
 fi
 
 if has_agent codex; then
-  echo 'Installing/updating OpenAI Codex CLI...'
-  run_as_dev_shell 'set -o pipefail; curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh'
+  install_agent codex 'OpenAI Codex CLI' \
+    run_as_dev_shell 'set -o pipefail; curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh'
 fi
 
 if has_agent gemini; then
-  echo 'Installing/updating Google Gemini CLI...'
-  run_as_dev npm install -g @google/gemini-cli@latest
+  install_agent gemini 'Google Gemini CLI' \
+    run_as_dev npm install -g @google/gemini-cli@latest
 fi
 
 if has_agent copilot; then
-  echo 'Installing/updating GitHub Copilot CLI...'
-  run_as_dev env npm_config_ignore_scripts=false npm install -g @github/copilot@latest
+  install_agent copilot 'GitHub Copilot CLI' \
+    run_as_dev env npm_config_ignore_scripts=false npm install -g @github/copilot@latest
 fi
 
 if has_agent aider; then
-  echo 'Installing/updating Aider...'
-  run_as_dev_shell 'set -o pipefail; curl -LsSf https://aider.chat/install.sh | sh'
+  install_agent aider 'Aider' \
+    run_as_dev_shell 'set -o pipefail; curl -LsSf https://aider.chat/install.sh | sh'
 fi
 
 if has_agent opencode; then
-  echo 'Installing/updating OpenCode...'
-  run_as_dev_shell 'set -o pipefail; curl -fsSL https://opencode.ai/install | bash'
+  install_agent opencode 'OpenCode' \
+    run_as_dev_shell 'set -o pipefail; curl -fsSL https://opencode.ai/install | bash'
 fi
 
 link_user_command() {
@@ -1189,8 +1268,13 @@ has_agent() { [[ ",$SELECTED_AGENTS," == *",$1,"* ]]; }
 export PATH="$HOME/.local/bin:$HOME/.local/npm/bin:$HOME/.opencode/bin:/usr/local/bin:/usr/bin:/bin"
 
 if has_agent claude; then
-  echo 'Updating Claude Code...'
-  curl -fsSL https://claude.ai/install.sh | bash
+  echo 'Updating Claude Code from the Anthropic APT repository...'
+  if dpkg-query -W -f='${Status}' claude-code 2>/dev/null | grep -q 'ok installed'; then
+    sudo apt-get update
+    sudo apt-get install -y --only-upgrade claude-code
+  else
+    echo 'Claude Code is not managed by APT. Run the Proxmox helper Update/repair action.' >&2
+  fi
 fi
 if has_agent codex; then
   echo 'Updating OpenAI Codex CLI...'
@@ -1349,6 +1433,14 @@ cd "$PROJECT"
 chown -R "$DEV_USER:$DEV_USER" "$PROJECT/results"
 
 rm -f /root/claude-dev.env
+if ((${#FAILED_AGENTS[@]} > 0)); then
+  printf '%s\n' "${FAILED_AGENTS[@]}" >/var/log/ai-agent-install-failures
+  chmod 0644 /var/log/ai-agent-install-failures
+  printf '[%s] Provisioning completed with AI-agent failures: %s\n' \
+    "$(date '+%F %T')" "${FAILED_AGENTS[*]}"
+  exit 20
+fi
+rm -f /var/log/ai-agent-install-failures
 printf '[%s] Provisioning completed\n' "$(date '+%F %T')"
 PROVISION
   chmod 0700 "$provision_file"
@@ -1359,13 +1451,23 @@ PROVISION
 }
 
 provision_container() {
+  local rc=0
+  PROVISION_WARNING=""
   write_provision_files
   msg_info "Installing the headless development toolchain inside LXC $CTID…
 
 This includes package upgrades, code-server, selected AI coding agents, Python, Robot Framework, GitHub CLI, helper commands, and a smoke test."
 
-  if ! pct exec "$CTID" -- /root/claude-dev-provision.sh >>"$LOG_FILE" 2>&1; then
-    pct exec "$CTID" -- bash -lc 'tail -n 80 /var/log/claude-dev-provision.log' >>"$LOG_FILE" 2>&1 || true
+  set +e
+  pct exec "$CTID" -- /root/claude-dev-provision.sh >>"$LOG_FILE" 2>&1
+  rc=$?
+  set -e
+
+  if ((rc == 20)); then
+    PROVISION_WARNING=$(pct exec "$CTID" -- bash -lc       'printf "The environment is operational, but these selected AI agents failed to install: "; paste -sd", " /var/log/ai-agent-install-failures 2>/dev/null || true'       2>/dev/null || true)
+    pct exec "$CTID" -- bash -lc 'tail -n 120 /var/log/claude-dev-provision.log' >>"$LOG_FILE" 2>&1 || true
+  elif ((rc != 0)); then
+    pct exec "$CTID" -- bash -lc 'tail -n 120 /var/log/claude-dev-provision.log' >>"$LOG_FILE" 2>&1 || true
     show_error_details "Provisioning failed inside LXC $CTID. The container was left intact for diagnosis."
     return 1
   fi
@@ -1491,8 +1593,12 @@ Robot Framework example:
 Access details were saved on the Proxmox host:
 $credentials_file
 
-Installation log:
-$LOG_FILE" 32 90
+${PROVISION_WARNING:+WARNING:
+$PROVISION_WARNING
+Review /var/log/ai-agent-<name>-install.log inside the LXC, then use Update/repair.
+
+}Installation log:
+$LOG_FILE" 35 90
 }
 
 new_installation() {
@@ -1531,8 +1637,11 @@ new_installation() {
     return 0
   fi
 
+  # Register the container before provisioning so a partial deployment remains repairable.
+  write_state_file
+
   if ! provision_container; then
-    msg_warn "LXC $CTID exists but provisioning is incomplete. Use the Update/repair option after reviewing the log."
+    msg_warn "LXC $CTID exists but provisioning is incomplete. It remains registered and can be repaired from the main menu after reviewing the log."
     return 0
   fi
 
@@ -1619,11 +1728,124 @@ Selected agents: $(selected_agents_display)" yes; then
     return 0
   fi
 
-  provision_container
-  write_state_file
-  msg_ok "LXC $CTID was updated successfully.
+  if ! provision_container; then
+    msg_warn "LXC $CTID is still incomplete. Review the provisioning log and retry Update/repair.
 
 Log: $LOG_FILE"
+    return 0
+  fi
+  write_state_file
+  if [[ -n "$PROVISION_WARNING" ]]; then
+    msg_warn "LXC $CTID was updated, but one or more selected AI agents failed.
+
+$PROVISION_WARNING
+
+Detailed logs are under /var/log/ai-agent-*-install.log inside the LXC."
+  else
+    msg_ok "LXC $CTID was updated successfully.
+
+Log: $LOG_FILE"
+  fi
+}
+
+adopt_existing_container() {
+  local detected_config=""
+  local bind_addr=""
+  local detected_agents=""
+  local ip=""
+  local credentials_file=""
+
+  CTID=$(input_box "ADOPT EXISTING LXC" \
+    "Enter the numeric ID of an existing AI Development LXC.
+
+This is intended for containers left intact after an earlier provisioning failure." \
+    "${CTID:-}") || return 0
+  [[ "$CTID" =~ ^[1-9][0-9]{1,8}$ ]] || { msg_warn "Invalid container ID: $CTID"; return 0; }
+  pct status "$CTID" >/dev/null 2>&1 || { msg_warn "LXC $CTID does not exist on this Proxmox node."; return 0; }
+
+  if [[ "$(pct status "$CTID" 2>/dev/null | awk '{print $2}')" != "running" ]]; then
+    msg_info "Starting LXC $CTID…"
+    pct start "$CTID" >>"$LOG_FILE" 2>&1
+    sleep 3
+  fi
+
+  CT_HOSTNAME=$(pct config "$CTID" 2>/dev/null | awk -F': ' '$1 == "hostname" {print $2; exit}')
+  CT_HOSTNAME=${CT_HOSTNAME:-ai-dev}
+  ROOTFS_STORAGE=$(pct config "$CTID" 2>/dev/null | awk -F': ' '$1 == "rootfs" {split($2,a,":"); print a[1]; exit}')
+  BRIDGE=$(pct config "$CTID" 2>/dev/null | sed -n 's/^net0:.*bridge=\([^,]*\).*/\1/p' | head -n1)
+
+  detected_config=$(pct exec "$CTID" -- bash -lc \
+    "find /home -path '*/.config/code-server/config.yaml' -type f -print -quit" 2>/dev/null || true)
+  if [[ -n "$detected_config" ]]; then
+    DEV_USER=$(cut -d/ -f3 <<<"$detected_config")
+    bind_addr=$(pct exec "$CTID" -- awk -F': ' '$1 == "bind-addr" {print $2; exit}' "$detected_config" 2>/dev/null || true)
+    CODE_SERVER_PORT=${bind_addr##*:}
+    [[ "$CODE_SERVER_PORT" =~ ^[0-9]+$ ]] || CODE_SERVER_PORT="$DEFAULT_PORT"
+    if [[ "$bind_addr" == 127.0.0.1:* || "$bind_addr" == localhost:* ]]; then
+      ACCESS_MODE="tunnel"
+      CODE_SERVER_PASSWORD=""
+    else
+      ACCESS_MODE="lan"
+      CODE_SERVER_PASSWORD=$(pct exec "$CTID" -- sed -n 's/^password:[[:space:]]*//p' "$detected_config" 2>/dev/null | head -n1 || true)
+    fi
+  else
+    DEV_USER=$(input_box "DEVELOPMENT USER" \
+      "code-server configuration was not detected. Enter the development username." "$DEFAULT_USER") || return 0
+    ACCESS_MODE="tunnel"
+    CODE_SERVER_PORT="$DEFAULT_PORT"
+    CODE_SERVER_PASSWORD=""
+  fi
+
+  detected_agents=$(pct exec "$CTID" -- bash -lc \
+    'if [[ -r /etc/ai-agent-selection ]]; then source /etc/ai-agent-selection; printf "%s" "${SELECTED_AGENTS:-}"; fi' \
+    2>/dev/null || true)
+  SELECTED_AGENTS=${detected_agents:-claude}
+
+  if ask_yes_no "AI AGENT SELECTION" \
+    "Detected selection: $(selected_agents_display)
+
+Change the agents to install or repair?" no; then
+    choose_ai_agents || return 0
+  fi
+
+  CONFIGURE_SSH="0"
+  DEV_PASSWORD=""
+  SSH_KEY_CONTENT=""
+  GIT_NAME=""
+  GIT_EMAIL=""
+  PASSWORD_AUTH="yes"
+
+  if ! ask_yes_no "ADOPT AND REPAIR" \
+    "Adopt LXC $CTID as a managed AI Development LXC and run idempotent repair?
+
+Hostname: $CT_HOSTNAME
+User: $DEV_USER
+Web IDE: $ACCESS_MODE on port $CODE_SERVER_PORT
+Agents: $(selected_agents_display)
+
+Existing projects under /srv/workspace are preserved." yes; then
+    return 0
+  fi
+
+  write_state_file
+  if ! provision_container; then
+    msg_warn "LXC $CTID was registered, but repair is still incomplete. Review the log and retry Update/repair.
+
+Log: $LOG_FILE"
+    return 0
+  fi
+  write_state_file
+  ip=$(wait_for_ct_ipv4 || true)
+  credentials_file=$(write_credentials_file "$ip")
+  if [[ -n "$PROVISION_WARNING" ]]; then
+    msg_warn "LXC $CTID was adopted and the base development environment is operational.
+
+$PROVISION_WARNING
+
+Use Update/repair after resolving the indicated agent issue."
+  else
+    show_completion "$ip" "$credentials_file"
+  fi
 }
 
 show_managed_info() {
@@ -1685,20 +1907,22 @@ main_menu() {
       "Run this helper on the Proxmox VE host. Choose an action." \
       "1" "Create a new headless development LXC" \
       "2" "Update or repair a managed development LXC" \
-      "3" "Show access and status information" \
-      "4" "Open a managed container console" \
-      "5" "Show this run's log file" \
-      "6" "Exit") || break
+      "3" "Adopt and repair an incomplete existing LXC" \
+      "4" "Show access and status information" \
+      "5" "Open a managed container console" \
+      "6" "Show this run's log file" \
+      "7" "Exit") || break
 
     case "$choice" in
       1) new_installation ;;
       2) update_managed_container ;;
-      3) show_managed_info ;;
-      4) open_container_shell ;;
-      5)
+      3) adopt_existing_container ;;
+      4) show_managed_info ;;
+      5) open_container_shell ;;
+      6)
         whiptail --backtitle "$BACKTITLE" --title "RUN LOG" --scrolltext --textbox "$LOG_FILE" 30 100
         ;;
-      6) break ;;
+      7) break ;;
     esac
   done
 }

@@ -278,3 +278,7 @@ Report vulnerabilities privately according to [SECURITY.md](SECURITY.md).
 ## License
 
 [MIT](LICENSE)
+
+## Repairing a failed Claude Code installation
+
+Release 2.2.1 installs Claude Code through Anthropic's signed Debian APT repository. For an existing managed LXC, run the helper and select **Update or repair a managed development LXC**. The web IDE and other successfully installed components remain available even if one selected AI agent fails. Per-agent logs are stored inside the container under `/var/log/ai-agent-<agent>-install.log`.

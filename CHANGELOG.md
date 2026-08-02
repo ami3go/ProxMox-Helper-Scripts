@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.2.1 — 2026-08-02
+
+### Fixed
+
+- Install Claude Code on Debian through Anthropic's signed stable APT repository instead of the opaque per-user native installer.
+- Verify Anthropic's release-signing key fingerprint before trusting the repository.
+- Detect missing AVX support on x86-64 and report the actual Proxmox CPU limitation.
+- Preserve the operational code-server/Python environment when an optional AI-agent installation fails.
+- Write detailed per-agent logs under `/var/log/ai-agent-<agent>-install.log`.
+- Allow Update/repair to complete and report partial agent failures clearly.
+
 All notable changes are documented here.
 
 ## 2.2.0 - 2026-08-02

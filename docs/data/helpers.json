@@ -5,7 +5,7 @@
       "id": "ai-dev-lxc",
       "name": "AI Development LXC",
       "category": "development",
-      "version": "2.2.0",
+      "version": "2.2.1",
       "description": "Create and maintain a headless Debian LXC with code-server, Python, Robot Framework, GitHub tooling, and selectable AI coding agents.",
       "target": "proxmox-host",
       "tags": [
@@ -19,7 +19,7 @@
       "path": "helpers/ai-dev-lxc",
       "entrypoint": "helpers/ai-dev-lxc/install.sh",
       "docs": "helpers/ai-dev-lxc/README.md",
-      "bundle": "ai-dev-lxc-bundle-v2.2.0.zip",
+      "bundle": "ai-dev-lxc-bundle-v2.2.1.zip",
       "standalone": true
     }
   ]

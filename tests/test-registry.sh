@@ -7,7 +7,7 @@ source "$ROOT_DIR/lib/registry.sh"
 ph_registry_find ai-dev-lxc
 [[ $HELPER_NAME == 'AI Development LXC' ]]
 [[ $HELPER_CATEGORY == development ]]
-[[ $HELPER_VERSION == 2.2.0 ]]
+[[ $HELPER_VERSION == 2.2.1 ]]
 [[ $PH_HELPER_DIR == "$ROOT_DIR/helpers/ai-dev-lxc" ]]
 [[ -x $PH_HELPER_DIR/$HELPER_ENTRYPOINT ]]
 
