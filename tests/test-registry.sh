@@ -7,9 +7,10 @@ source "$ROOT_DIR/lib/registry.sh"
 ph_registry_find ai-dev-lxc
 [[ $HELPER_NAME == 'AI Development LXC' ]]
 [[ $HELPER_CATEGORY == development ]]
-[[ $HELPER_VERSION == 2.2.1 ]]
+[[ $HELPER_VERSION == 2.3.0 ]]
 [[ $PH_HELPER_DIR == "$ROOT_DIR/helpers/ai-dev-lxc" ]]
 [[ -x $PH_HELPER_DIR/$HELPER_ENTRYPOINT ]]
+[[ -x $PH_HELPER_DIR/$HELPER_POST_INSTALL ]]
 
 count=$(ph_registry_list_tsv | wc -l)
 ((count >= 1))

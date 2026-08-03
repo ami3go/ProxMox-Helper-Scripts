@@ -1,5 +1,36 @@
 # Changelog
 
+## 2.3.0 — 2026-08-03
+
+### Added
+
+- Add an interactive `post-install.sh` for Debian LXCs created manually in the Proxmox UI.
+- Add central launcher command `post-install ID` and manifest field `HELPER_POST_INSTALL`.
+- Add direct DHCP/LAN SSH and password-protected code-server configuration without an SSH tunnel.
+- Add an in-container `ai-dev-first-login` menu for GitHub and Claude authentication.
+- Add verbose host and LXC post-install logs with explicit step names, timings, and failure context.
+- Publish standalone post-install release assets in addition to complete helper bundles.
+
+### Changed
+
+- Make DHCP and direct LAN code-server access the default for the AI Development LXC helper.
+- Disable the helper-managed `net0` firewall flag for trusted internal-network access.
+- Set new, repaired, and adopted containers to Proxmox `cmode=shell`.
+
+### Fixed
+
+- Fix blank or unusable Proxmox web-console sessions on minimal Debian LXCs by opening a direct root shell instead of relying on an in-container TTY login service.
+
+## 2.2.2 — 2026-08-03
+
+### Added
+
+- Stream every installation and repair stage to both the Proxmox console and the host run log.
+- Stream the complete in-container provisioning output simultaneously to the console and `/var/log/claude-dev-provision.log`.
+- Add numbered LXC step headers, timestamps, elapsed-time summaries, and explicit current-step failure diagnostics.
+- Add visible host stages for template refresh/download, LXC creation/start/readiness, provisioning payload transfer, software provisioning, and deletion protection.
+- Preserve secret safety by avoiding global `set -x`; passwords, SSH keys, and API-key values are not echoed as commands.
+
 ## 2.2.1 — 2026-08-02
 
 ### Fixed

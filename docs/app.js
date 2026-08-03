@@ -67,6 +67,12 @@
         command.className = 'catalog-command';
         command.textContent = `./bin/proxmox-helper-scripts run ${helper.id}`;
 
+        const postInstallCommand = helper.postInstall ? document.createElement('code') : null;
+        if (postInstallCommand) {
+          postInstallCommand.className = 'catalog-command';
+          postInstallCommand.textContent = `./bin/proxmox-helper-scripts post-install ${helper.id}`;
+        }
+
         const downloads = document.createElement('div');
         downloads.className = 'catalog-downloads';
         const bundle = document.createElement('a');
@@ -81,8 +87,17 @@
           standalone.textContent = 'Standalone script';
           downloads.append(standalone);
         }
+        if (helper.postInstall) {
+          const postInstall = document.createElement('a');
+          postInstall.className = 'button secondary';
+          postInstall.href = `downloads/${helper.id}-post-install.sh`;
+          postInstall.textContent = 'Post-install script';
+          downloads.append(postInstall);
+        }
 
-        card.append(heading, metadata, description, command, downloads);
+        card.append(heading, metadata, description, command);
+        if (postInstallCommand) card.append(postInstallCommand);
+        card.append(downloads);
         return card;
       }));
     } catch (catalogError) {

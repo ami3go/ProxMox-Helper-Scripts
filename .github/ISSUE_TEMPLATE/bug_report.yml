@@ -11,14 +11,14 @@ body:
     id: repository-version
     attributes:
       label: Repository version
-      placeholder: 2.2.1
+      placeholder: 2.3.0
     validations:
       required: true
   - type: input
     id: helper
     attributes:
       label: Helper ID and version
-      placeholder: ai-dev-lxc 2.2.1, or framework/launcher
+      placeholder: ai-dev-lxc 2.3.0, or framework/launcher
     validations:
       required: true
   - type: input

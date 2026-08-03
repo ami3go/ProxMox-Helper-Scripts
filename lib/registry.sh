@@ -17,7 +17,7 @@ ph_registry_manifests() {
 ph_manifest_reset() {
   unset HELPER_ID HELPER_NAME HELPER_CATEGORY HELPER_VERSION HELPER_DESCRIPTION
   unset HELPER_ENTRYPOINT HELPER_TARGET HELPER_TAGS HELPER_MAINTAINER
-  unset HELPER_DOCS HELPER_STANDALONE
+  unset HELPER_DOCS HELPER_STANDALONE HELPER_POST_INSTALL
 }
 
 ph_manifest_is_static() {
@@ -59,6 +59,9 @@ ph_manifest_validate_loaded() {
   [[ $HELPER_CATEGORY =~ ^[a-z0-9]+([._-][a-z0-9]+)*$ ]] || return 1
   [[ $HELPER_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][A-Za-z0-9._-]+)?$ ]] || return 1
   [[ -f $PH_HELPER_DIR/$HELPER_ENTRYPOINT ]] || return 1
+  if [[ -n ${HELPER_POST_INSTALL:-} ]]; then
+    [[ -f $PH_HELPER_DIR/$HELPER_POST_INSTALL ]] || return 1
+  fi
 }
 
 ph_registry_find() {
@@ -99,6 +102,22 @@ ph_registry_run() {
     return 1
   }
   local entry="$PH_HELPER_DIR/$HELPER_ENTRYPOINT"
+  [[ -x $entry ]] || chmod +x "$entry"
+  exec "$entry" "$@"
+}
+
+ph_registry_post_install() {
+  local helper_id=$1
+  shift
+  ph_registry_find "$helper_id" || {
+    printf 'Unknown helper: %s\n' "$helper_id" >&2
+    return 1
+  }
+  [[ -n ${HELPER_POST_INSTALL:-} ]] || {
+    printf 'Helper %s does not provide a post-install action.\n' "$helper_id" >&2
+    return 1
+  }
+  local entry="$PH_HELPER_DIR/$HELPER_POST_INSTALL"
   [[ -x $entry ]] || chmod +x "$entry"
   exec "$entry" "$@"
 }
