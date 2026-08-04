@@ -43,24 +43,23 @@
             <code id="install-command">./bin/proxmox-helper-scripts</code>
             <button class="copy-button" type="button" data-copy-target="install-command">Copy</button>
           </div>
-          <p class="checksum-link">Version 2.3.0 · Manifest-driven · MIT licensed</p>
+          <p class="checksum-link">Version 2.2.2 · Manifest-driven · MIT licensed</p>
         </div>
 
         <div class="terminal-demo" aria-label="Example helper catalog">
           <div class="terminal-bar"><span></span><span></span><span></span><strong>Proxmox node</strong></div>
           <pre><code>┌──────────────────────────────────────────┐
-│       PROXMOX HELPER SCRIPTS v2.3.0      │
+│       PROXMOX HELPER SCRIPTS v2.2.2      │
 ├──────────────────────────────────────────┤
 │  development                             │
-│    AI Development LXC            v2.3.0  │
+│    AI Development LXC            v2.2.2  │
 │                                          │
 │  New helpers are discovered from:        │
 │  helpers/&lt;helper-id&gt;/         │
 └──────────────────────────────────────────┘
 
 $ ./bin/proxmox-helper-scripts list
-$ ./bin/proxmox-helper-scripts run ai-dev-lxc
-$ ./bin/proxmox-helper-scripts post-install ai-dev-lxc</code></pre>
+$ ./bin/proxmox-helper-scripts run ai-dev-lxc</code></pre>
         </div>
       </div>
     </section>
@@ -90,7 +89,7 @@ $ ./bin/proxmox-helper-scripts post-install ai-dev-lxc</code></pre>
         <p class="eyebrow">Repository architecture</p>
         <h2>Provisioning stays local; infrastructure stays shared.</h2>
         <div class="card-grid">
-          <article class="card"><h3>Per-helper ownership</h3><p>Each helper owns one stable folder under <code>helpers/&lt;id&gt;/</code>, including its manifest, primary installer, optional post-install entrypoint, files, modules, templates, assets, documentation, and tests.</p></article>
+          <article class="card"><h3>Per-helper ownership</h3><p>Each helper owns one stable folder under <code>helpers/&lt;id&gt;/</code>, including its manifest, installer, files, modules, templates, assets, documentation, and tests.</p></article>
           <article class="card"><h3>Static registry</h3><p>Literal metadata is validated without execution, then used by the launcher, catalog generator, Pages site, and release packager.</p></article>
           <article class="card"><h3>Shared primitives</h3><p>Generic root checks, messages, menus, discovery, and execution live under <code>lib/</code>. Product-specific logic does not.</p></article>
           <article class="card"><h3>Central launcher</h3><p>The same command lists, inspects, validates, and runs every registered helper from a TUI or normal CLI.</p></article>
@@ -149,9 +148,8 @@ $ ./bin/proxmox-helper-scripts post-install ai-dev-lxc</code></pre>
       <div class="container callout">
         <div><p class="eyebrow">First included helper</p><h2>Deploy the headless AI Development LXC.</h2></div>
         <div class="hero-actions">
-          <a class="button primary" href="downloads/ai-dev-lxc-bundle-v2.3.0.zip">Download complete bundle</a>
-          <a class="button secondary" href="downloads/ai-dev-lxc.sh">New LXC script</a>
-          <a class="button secondary" href="downloads/ai-dev-lxc-post-install.sh">Post-install script</a>
+          <a class="button primary" href="downloads/ai-dev-lxc-bundle-v2.2.2.zip">Download complete bundle</a>
+          <a class="button secondary" href="downloads/ai-dev-lxc.sh">Standalone script</a>
         </div>
       </div>
     </section>

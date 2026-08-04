@@ -23,7 +23,6 @@ ALLOWED = REQUIRED | {
     "HELPER_MAINTAINER",
     "HELPER_DOCS",
     "HELPER_STANDALONE",
-    "HELPER_POST_INSTALL",
 }
 STANDARD_DIRS = ("assets", "files", "lib", "templates", "tests")
 SLUG = re.compile(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*$")
@@ -96,13 +95,6 @@ def main() -> int:
             entry = manifest.parent / values["HELPER_ENTRYPOINT"]
             if not entry.is_file():
                 raise ValueError(f"{manifest}: entrypoint does not exist: {entry.name}")
-            post_install_name = values.get("HELPER_POST_INSTALL", "")
-            if post_install_name:
-                post_install = manifest.parent / post_install_name
-                if not post_install.is_file():
-                    raise ValueError(
-                        f"{manifest}: post-install entrypoint does not exist: {post_install.name}"
-                    )
             docs = manifest.parent / values.get("HELPER_DOCS", "README.md")
             if not docs.is_file():
                 raise ValueError(f"{manifest}: documentation file does not exist: {docs.name}")

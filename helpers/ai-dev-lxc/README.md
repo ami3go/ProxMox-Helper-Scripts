@@ -1,178 +1,79 @@
 # AI Development LXC
 
-Creates a new unprivileged Debian LXC on Proxmox VE or post-configures an LXC that was created manually.
+Creates an unprivileged Debian LXC on a Proxmox VE node and provisions a headless AI-assisted development workstation.
 
 ## Included
 
-- Direct DHCP/LAN access for SSH and code-server
-- Password-protected code-server browser IDE
+- code-server browser IDE
 - Python virtual environments
 - Robot Framework and RobotCode
 - Git and GitHub CLI
-- Claude Code from Anthropic's signed stable APT repository
-- Optional Codex CLI, Gemini CLI, GitHub Copilot CLI, Aider, and OpenCode in the full installer
-- Proxmox web-console repair using `cmode=shell`
-- Verbose console output and persistent host/LXC logs
-- Idempotent update and repair workflows
+- Claude Code, Codex CLI, Gemini CLI, GitHub Copilot CLI, Aider, and OpenCode selection
+- direct password-protected LAN access by default, with optional SSH-tunnel mode
+- post-install service, socket, `/healthz`, and Proxmox-host reachability verification
+- GNOME Keyring, Secret Service/libsecret, Python keyring, `pass`, and curses PIN entry
+- `web-ide-status`, `keyring-status`, and `keyring-session` diagnostic helpers
+- update, repair, adoption, and standalone web-verification workflows
 
-## Create and provision a new LXC
-
-From the repository launcher:
+## Run from the repository
 
 ```bash
 ./bin/proxmox-helper-scripts run ai-dev-lxc
 ```
 
-Or run the installer directly:
+Direct execution remains supported:
 
 ```bash
 ./helpers/ai-dev-lxc/install.sh
 ```
 
-The new-container installer uses DHCP, listens on the LXC LAN address, and configures the Proxmox console to open a direct root shell.
+A standalone copy is included in tagged release assets as `ai-dev-lxc.sh` and retained under the legacy name `proxmox-ai-dev-lxc.sh`.
 
-## Post-configure an existing LXC
-
-Create a Debian LXC using the Proxmox web interface, then run:
+When extracted from a helper bundle, run:
 
 ```bash
-./bin/proxmox-helper-scripts post-install ai-dev-lxc
+cd ai-dev-lxc
+chmod +x install.sh
+./install.sh
 ```
 
-Direct execution is also supported:
+## Helper package directories
 
-```bash
-cd helpers/ai-dev-lxc
-chmod +x post-install.sh
-./post-install.sh
-```
+This helper is self-contained under `helpers/ai-dev-lxc/`. Future helper-specific configuration templates, payloads, shell modules, screenshots, and tests should be added to its `templates/`, `files/`, `lib/`, `assets/`, and `tests/` directories rather than to repository-global folders.
 
-The post-install TUI lets you select an existing CTID and configure:
-
-- Primary `net0` for DHCP
-- Direct LAN SSH access
-- Development user and SSH authentication
-- code-server port and password
-- Python and Robot Framework environment
-- GitHub CLI and optional Git identity
-- Claude Code installation
-- Proxmox web-console shell mode
-
-It preserves existing files under `/srv/workspace` and is safe to rerun for repair.
-
-## Proxmox web-console fix
-
-The helper runs:
-
-```bash
-pct set CTID --cmode shell
-```
-
-Proxmox documents `cmode=shell` as opening a shell directly inside the container without relying on a login prompt on a TTY. This fixes minimal Debian containers where the default Proxmox Console action opens a blank or unusable terminal.
-
-## Direct LAN access
-
-The helper assumes the internal network is trusted. It does not require an SSH tunnel.
-
-After installation, use the DHCP address shown in the completion dialog:
-
-```bash
-ssh dev@LXC_IP
-```
-
-Open code-server at:
-
-```text
-http://LXC_IP:8080
-```
-
-The configured port can be changed in the TUI. code-server still uses password authentication, but the connection is plain HTTP. Do not forward the port directly to the public internet.
-
-## First-login setup
-
-After connecting through SSH or the code-server terminal, run:
-
-```bash
-ai-dev-first-login
-```
-
-The interactive menu can:
-
-- Authenticate GitHub CLI
-- Start Claude Code's browser login
-- Run `claude doctor`
-- Show environment and service status
-- Open the Robot Framework example project
-
-## Logs
-
-### Full installer
-
-Host log:
-
-```text
-/var/log/claude-dev-lxc/run-YYYYMMDD-HHMMSS.log
-```
-
-LXC provisioning log:
-
-```text
-/var/log/claude-dev-provision.log
-```
-
-AI-agent installation logs:
-
-```text
-/var/log/ai-agent-<agent>-install.log
-```
-
-### Post-install utility
-
-Host log:
-
-```text
-/var/log/ai-dev-lxc-post-install/run-YYYYMMDD-HHMMSS.log
-```
-
-LXC provisioning log:
-
-```text
-/var/log/ai-dev-post-install.log
-```
-
-Every major action and command output is streamed to both the current console and the appropriate log file. Global `set -x` tracing is not used because it could reveal passwords, SSH keys, or provider tokens.
+Tagged releases include both the standalone installer and complete ZIP/TAR.GZ bundles of this folder.
 
 ## Claude Code installation
 
-On Debian, both workflows install Claude Code from Anthropic's signed `stable` APT repository and verify the signing-key fingerprint:
+On Debian, the helper installs Claude Code from Anthropic's signed `stable` APT repository and verifies signing-key fingerprint `31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF 1A7E CACE`. Detailed installation output is stored in `/var/log/ai-agent-claude-install.log`. On x86-64, the helper checks that the Proxmox host exposes the AVX CPU flag before installation.
 
-```text
-31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF 1A7E CACE
-```
 
-On x86-64, the scripts verify that AVX is exposed to the LXC before installing Claude Code.
+## Web IDE verification
 
-Authentication is completed later as the normal development user:
+Provisioning does not report success until code-server passes all checks appropriate to the selected access mode:
+
+1. `code-server@<user>` is active under systemd.
+2. The configured TCP port is listening on the expected address.
+3. `http://127.0.0.1:<port>/healthz` returns a valid code-server health response.
+4. In LAN mode, the Proxmox host can reach `http://<lxc-ip>:<port>/healthz`.
+
+Inside the LXC, run:
 
 ```bash
-claude
+web-ide-status
 ```
 
-## Helper package layout
+From the helper TUI, select **Verify Web IDE service and HTTP access** to repeat the complete check. A LAN failure records service status, journal output, listeners, routing, container configuration, and Proxmox firewall status in the helper log.
 
-All helper-specific files are contained under `helpers/ai-dev-lxc/`:
+## Credential and keyring support
 
-```text
-helpers/ai-dev-lxc/
-├── manifest.env
-├── install.sh
-├── post-install.sh
-├── README.md
-├── assets/
-├── files/
-├── lib/
-├── templates/
-└── tests/
+The helper installs `gnome-keyring`, `libsecret-tools`, `dbus-user-session`, `libpam-gnome-keyring`, `python3-keyring`, `pinentry-curses`, `pass`, and `keyutils`. This does not install a desktop environment.
+
+Useful commands:
+
+```bash
+keyring-status
+keyring-session
 ```
 
-Tagged releases include the complete helper bundle, the standalone new-container installer, and the standalone post-install utility.
+`keyring-session` opens a shell with a private D-Bus session and GNOME Keyring daemon. It is useful for terminal applications that expect the Secret Service API. SSH public-key logins cannot automatically unlock a password-protected login keyring because no login password is supplied; use `keyring-session`, `pass`, or agent forwarding according to the application's credential model.

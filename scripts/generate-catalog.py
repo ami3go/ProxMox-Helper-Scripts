@@ -37,11 +37,6 @@ def main() -> None:
                 "tags": [x for x in values.get("HELPER_TAGS", "").split(",") if x],
                 "path": rel,
                 "entrypoint": f"{rel}/{values['HELPER_ENTRYPOINT']}",
-                "postInstall": (
-                    f"{rel}/{values['HELPER_POST_INSTALL']}"
-                    if values.get("HELPER_POST_INSTALL")
-                    else None
-                ),
                 "docs": f"{rel}/{values.get('HELPER_DOCS', 'README.md')}",
                 "bundle": f"{values['HELPER_ID']}-bundle-v{values['HELPER_VERSION']}.zip",
                 "standalone": values.get("HELPER_STANDALONE", "false").lower() == "true",

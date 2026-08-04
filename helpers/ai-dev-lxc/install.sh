@@ -11,7 +11,7 @@ set -Eeuo pipefail
 shopt -s inherit_errexit 2>/dev/null || true
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_VERSION="2.3.0"
+readonly SCRIPT_VERSION="2.2.2"
 readonly BACKTITLE="AI Development LXC • Proxmox VE"
 readonly STATE_DIR="/etc/claude-dev-lxc"
 readonly LOG_DIR="/var/log/claude-dev-lxc"
@@ -26,7 +26,6 @@ readonly DEFAULT_PORT="8080"
 LOG_FILE=""
 LAST_ERROR=""
 PROVISION_WARNING=""
-VERBOSE_ACTIVE=0
 
 # Runtime configuration
 CTID=""
@@ -95,43 +94,6 @@ log() {
   printf '[%s] %s\n' "$(date '+%F %T')" "$*" >>"$LOG_FILE"
 }
 
-console_log() {
-  local level=$1
-  shift
-  local line
-  line="[$(date '+%F %T')] [$level] $*"
-  printf '%s\n' "$line" | tee -a "$LOG_FILE"
-}
-
-begin_verbose_output() {
-  [[ "$VERBOSE_ACTIVE" == "1" ]] && return 0
-  VERBOSE_ACTIVE=1
-  clear 2>/dev/null || true
-  printf '\n%s\n' '======================================================================' | tee -a "$LOG_FILE"
-  console_log INFO "AI Development LXC $SCRIPT_VERSION verbose installation output"
-  console_log INFO "Host log: $LOG_FILE"
-  printf '%s\n\n' '======================================================================' | tee -a "$LOG_FILE"
-}
-
-run_logged_step() {
-  local label=$1
-  shift
-  local started rc elapsed
-  started=$(date +%s)
-  console_log STEP "START: $label"
-  set +e
-  "$@" 2>&1 | tee -a "$LOG_FILE"
-  rc=${PIPESTATUS[0]}
-  set -e
-  elapsed=$(( $(date +%s) - started ))
-  if ((rc == 0)); then
-    console_log STEP "DONE: $label (${elapsed}s)"
-  else
-    console_log ERROR "FAILED: $label (exit $rc after ${elapsed}s)"
-  fi
-  return "$rc"
-}
-
 show_error_details() {
   local message=${1:-"An unexpected error occurred."}
   local excerpt=""
@@ -163,13 +125,9 @@ trap 'log "Interrupted by user"; exit 130' INT TERM
 
 msg_info() {
   local message=$1
-  if [[ "$VERBOSE_ACTIVE" == "1" ]]; then
-    console_log INFO "$message"
-  else
-    whiptail --backtitle "$BACKTITLE" --title "PLEASE WAIT" --infobox "$message" 8 72
-    sleep 0.15
-    log "INFO: $message"
-  fi
+  whiptail --backtitle "$BACKTITLE" --title "PLEASE WAIT" --infobox "$message" 8 72
+  sleep 0.15
+  log "INFO: $message"
 }
 
 msg_ok() {
@@ -434,7 +392,7 @@ find_debian_template() {
   local arch
   arch=$(dpkg --print-architecture 2>/dev/null || echo amd64)
   msg_info "Refreshing the Proxmox appliance-template index…"
-  run_logged_step "Refresh Proxmox appliance-template index" pveam update
+  pveam update >>"$LOG_FILE" 2>&1
 
   TEMPLATE_FILE=$(pveam available --section system 2>/dev/null \
     | awk -v arch="$arch" '$2 ~ /^debian-(13|12)-standard_/ && $2 ~ arch {print $2}' \
@@ -463,7 +421,7 @@ ensure_template_downloaded() {
   fi
 
   msg_info "Downloading $TEMPLATE_FILE to $TEMPLATE_STORAGE…"
-  run_logged_step "Download Debian template $TEMPLATE_FILE" pveam download "$TEMPLATE_STORAGE" "$TEMPLATE_FILE"
+  pveam download "$TEMPLATE_STORAGE" "$TEMPLATE_FILE" >>"$LOG_FILE" 2>&1
 }
 
 # ---------- Configuration wizard ----------
@@ -483,7 +441,7 @@ load_defaults() {
   NAMESERVER=""
   ACCESS_MODE="lan"
   CODE_SERVER_PORT="$DEFAULT_PORT"
-  CODE_SERVER_PASSWORD=$(openssl rand -hex 16)
+  CODE_SERVER_PASSWORD=""
   SSH_KEY_FILE=""
   SSH_KEY_CONTENT=""
   GIT_NAME=""
@@ -619,16 +577,40 @@ configure_advanced_mode() {
     return 1
   fi
 
-  IP_MODE="dhcp"
-  IP_CIDR=""
-  GATEWAY=""
-  NAMESERVER=""
+  choice=$(menu_box "IP CONFIGURATION" "Choose the container IPv4 configuration." \
+    "dhcp" "Obtain an address from DHCP" \
+    "static" "Configure a static IPv4 address") || return 1
+  IP_MODE=$choice
 
-  ACCESS_MODE="lan"
-  prompt_integer CODE_SERVER_PORT "WEB IDE PORT" \
-    "code-server TCP port for direct access through the LXC DHCP address:" \
-    "$CODE_SERVER_PORT" 1024 65535 || return 1
-  CODE_SERVER_PASSWORD=$(openssl rand -hex 16)
+  if [[ "$IP_MODE" == "static" ]]; then
+    while true; do
+      IP_CIDR=$(input_box "STATIC ADDRESS" "IPv4 address with prefix, for example 192.168.0.60/24:" "$IP_CIDR") || return 1
+      valid_cidr "$IP_CIDR" && break
+      msg_warn "Enter a valid IPv4 CIDR address."
+    done
+    while true; do
+      GATEWAY=$(input_box "GATEWAY" "IPv4 default gateway, for example 192.168.0.1:" "$GATEWAY") || return 1
+      valid_ipv4 "$GATEWAY" && break
+      msg_warn "Enter a valid IPv4 gateway address."
+    done
+    while true; do
+      NAMESERVER=$(input_box "DNS" "DNS server address, or leave blank to inherit the Proxmox host setting:" "$NAMESERVER") || return 1
+      if [[ -z "$NAMESERVER" ]] || valid_ipv4 "$NAMESERVER"; then
+        break
+      fi
+      msg_warn "Enter a valid IPv4 DNS address or leave the field blank."
+    done
+  fi
+
+  choice=$(menu_box "WEB IDE ACCESS" \
+    "Choose how code-server will be exposed. Direct LAN access is the default for private networks." \
+    "lan" "Direct LXC IP access with password authentication" \
+    "tunnel" "Loopback only; connect through an SSH tunnel") || return 1
+  ACCESS_MODE=$choice
+  prompt_integer CODE_SERVER_PORT "WEB IDE PORT" "code-server TCP port:" "$CODE_SERVER_PORT" 1024 65535 || return 1
+  if [[ "$ACCESS_MODE" == "lan" ]]; then
+    CODE_SERVER_PASSWORD=$(openssl rand -hex 16)
+  fi
 
   choose_ssh_access || return 1
 
@@ -697,7 +679,7 @@ Create this container now?" 30 88
 # ---------- Container creation ----------
 
 build_net0() {
-  local net="name=eth0,bridge=$BRIDGE,type=veth,firewall=0"
+  local net="name=eth0,bridge=$BRIDGE,type=veth,firewall=1"
   if [[ "$IP_MODE" == "dhcp" ]]; then
     net+=",ip=dhcp"
   else
@@ -732,33 +714,28 @@ create_container() {
     --onboot 1
     --startup "order=20,up=30"
     --protection 0
-    --cmode shell
     --tags "development;ai-agents;robotframework"
   )
   [[ -n "$NAMESERVER" ]] && args+=(--nameserver "$NAMESERVER")
 
   msg_info "Creating unprivileged Debian LXC $CTID…"
-  if ! run_logged_step "Create unprivileged LXC $CTID" pct "${args[@]}"; then
+  if ! pct "${args[@]}" >>"$LOG_FILE" 2>&1; then
     show_error_details "Proxmox could not create LXC $CTID."
     return 1
   fi
 
   msg_info "Starting LXC $CTID…"
-  run_logged_step "Start LXC $CTID" pct start "$CTID"
+  pct start "$CTID" >>"$LOG_FILE" 2>&1
 
   local attempts=0
-  console_log STEP "START: Wait for LXC $CTID command execution"
   until pct exec "$CTID" -- true >/dev/null 2>&1; do
     sleep 2
     ((attempts += 1))
-    console_log INFO "LXC $CTID readiness check $attempts/30"
     if ((attempts >= 30)); then
-      console_log ERROR "LXC $CTID did not become ready within 60 seconds"
       show_error_details "LXC $CTID did not become ready within 60 seconds."
       return 1
     fi
   done
-  console_log STEP "DONE: LXC $CTID is ready"
 }
 
 b64() {
@@ -794,37 +771,9 @@ ENV
 set -Eeuo pipefail
 
 LOG_FILE=/var/log/claude-dev-provision.log
-install -d -m 0755 "$(dirname "$LOG_FILE")"
-touch "$LOG_FILE"
-chmod 0600 "$LOG_FILE"
-exec > >(tee -a "$LOG_FILE") 2>&1
+exec >>"$LOG_FILE" 2>&1
+printf '\n[%s] Provisioning started\n' "$(date '+%F %T')"
 
-STEP_NUMBER=0
-CURRENT_STEP="initialization"
-PROVISION_STARTED=$(date +%s)
-
-step() {
-  CURRENT_STEP=$1
-  STEP_NUMBER=$((STEP_NUMBER + 1))
-  printf '\n[%s] [LXC STEP %02d] %s\n' "$(date '+%F %T')" "$STEP_NUMBER" "$CURRENT_STEP"
-  printf '%s\n' '----------------------------------------------------------------------'
-}
-
-on_provision_error() {
-  local rc=$?
-  local line=${BASH_LINENO[0]:-unknown}
-  local command=${BASH_COMMAND:-unknown}
-  printf '\n[%s] [ERROR] Step failed: %s\n' "$(date '+%F %T')" "$CURRENT_STEP" >&2
-  printf '[%s] [ERROR] Exit code: %s; line: %s; command: %s\n'     "$(date '+%F %T')" "$rc" "$line" "$command" >&2
-  printf '[%s] [ERROR] Full LXC log: %s\n' "$(date '+%F %T')" "$LOG_FILE" >&2
-  exit "$rc"
-}
-trap on_provision_error ERR
-trap 'printf "\n[%s] [ERROR] Provisioning interrupted during: %s\n" "$(date "+%F %T")" "$CURRENT_STEP" >&2; exit 130' INT TERM
-
-printf '\n[%s] Provisioning started; streaming to console and %s\n' "$(date '+%F %T')" "$LOG_FILE"
-
-step "Load and validate provisioning configuration"
 source /root/claude-dev.env
 
 decode() { printf '%s' "$1" | base64 -d; }
@@ -851,23 +800,19 @@ if [[ ! "$CODE_SERVER_PORT" =~ ^[0-9]+$ ]]; then
 fi
 
 export DEBIAN_FRONTEND=noninteractive
-step "Refresh Debian package indexes"
 apt-get update
-step "Upgrade installed Debian packages"
 apt-get full-upgrade -y
-step "Install base development, SSH, Python, Git, and diagnostic packages"
 apt-get install -y --no-install-recommends \
   sudo openssh-server ca-certificates curl wget git gh gnupg \
   build-essential python3 python3-dev python3-pip python3-venv pipx \
   jq ripgrep fd-find tmux unzip zip rsync shellcheck openssl \
-  make cmake pkg-config less nano vim bash-completion locales xz-utils
-step "Remove obsolete Debian packages"
+  make cmake pkg-config less nano vim bash-completion locales xz-utils \
+  iproute2 procps dbus dbus-user-session gnome-keyring libsecret-tools \
+  libsecret-1-0 libpam-gnome-keyring python3-keyring pinentry-curses pass keyutils
 apt-get autoremove -y
 
-step "Enable the OpenSSH server"
 systemctl enable --now ssh
 
-step "Create or update the development user and workspace"
 if ! id "$DEV_USER" >/dev/null 2>&1; then
   useradd --create-home --shell /bin/bash "$DEV_USER"
 fi
@@ -876,7 +821,6 @@ usermod -aG sudo,dialout "$DEV_USER"
 install -d -m 0750 -o "$DEV_USER" -g "$DEV_USER" /srv/workspace
 install -d -m 0700 -o "$DEV_USER" -g "$DEV_USER" "$DEV_HOME/.ssh"
 
-step "Configure development-user credentials and SSH access"
 if [[ -n "$DEV_PASSWORD" ]]; then
   printf '%s:%s\n' "$DEV_USER" "$DEV_PASSWORD" | chpasswd
 fi
@@ -901,13 +845,10 @@ EOF
 fi
 
 # code-server: official Debian installer.
-step "Download and install code-server"
-curl -fL --retry 3 --retry-delay 2 --show-error \
-  https://code-server.dev/install.sh -o /tmp/install-code-server.sh
+curl -fsSL https://code-server.dev/install.sh -o /tmp/install-code-server.sh
 sh /tmp/install-code-server.sh
 rm -f /tmp/install-code-server.sh
 
-step "Configure and start the code-server web panel"
 install -d -m 0700 -o "$DEV_USER" -g "$DEV_USER" "$DEV_HOME/.config/code-server"
 if [[ "$ACCESS_MODE" == "lan" ]]; then
   cat >"$DEV_HOME/.config/code-server/config.yaml" <<EOF
@@ -929,8 +870,149 @@ chown "$DEV_USER:$DEV_USER" "$DEV_HOME/.config/code-server/config.yaml"
 chmod 0600 "$DEV_HOME/.config/code-server/config.yaml"
 systemctl enable --now "code-server@$DEV_USER.service"
 
+verify_code_server_local() {
+  local service="code-server@$DEV_USER.service"
+  local health_url="http://127.0.0.1:$CODE_SERVER_PORT/healthz"
+  local health_file="/var/log/code-server-health.json"
+  local listener_file="/var/log/code-server-listener.txt"
+  local attempt
+
+  : >"$health_file"
+  : >"$listener_file"
+
+  for attempt in $(seq 1 30); do
+    if systemctl is-active --quiet "$service" && \
+       curl -fsS --max-time 4 "$health_url" -o "$health_file" && \
+       grep -Eq '"status"[[:space:]]*:' "$health_file"; then
+      break
+    fi
+    sleep 1
+  done
+
+  ss -H -lntp | awk -v port=":$CODE_SERVER_PORT" '$4 ~ port "$" {print}' >"$listener_file" || true
+
+  if ! systemctl is-active --quiet "$service"; then
+    echo "ERROR: code-server service is not active after installation." >&2
+    systemctl status "$service" --no-pager >&2 || true
+    journalctl -u "$service" -n 100 --no-pager >&2 || true
+    return 1
+  fi
+
+  if [[ ! -s "$health_file" ]] || ! grep -Eq '"status"[[:space:]]*:' "$health_file"; then
+    echo "ERROR: code-server /healthz did not return a valid response at $health_url." >&2
+    curl -v --max-time 5 "$health_url" >&2 || true
+    systemctl status "$service" --no-pager >&2 || true
+    journalctl -u "$service" -n 100 --no-pager >&2 || true
+    return 1
+  fi
+
+  if [[ ! -s "$listener_file" ]]; then
+    echo "ERROR: code-server is active but no TCP listener was found on port $CODE_SERVER_PORT." >&2
+    ss -lntp >&2 || true
+    return 1
+  fi
+
+  if [[ "$ACCESS_MODE" == "lan" ]]; then
+    if ! grep -Eq "(^|[[:space:]])(0\\.0\\.0\\.0|\\*|\\[::\\]):$CODE_SERVER_PORT([[:space:]]|$)" "$listener_file"; then
+      echo "ERROR: LAN mode requires code-server to listen on all interfaces, but the listener is:" >&2
+      cat "$listener_file" >&2
+      return 1
+    fi
+  else
+    if ! grep -Eq "(^|[[:space:]])127\\.0\\.0\\.1:$CODE_SERVER_PORT([[:space:]]|$)" "$listener_file"; then
+      echo "ERROR: Tunnel mode requires a loopback listener, but the listener is:" >&2
+      cat "$listener_file" >&2
+      return 1
+    fi
+  fi
+
+  printf 'Local code-server health check passed: %s\n' "$(cat "$health_file")"
+  printf 'Verified listener:\n'
+  cat "$listener_file"
+}
+
+verify_code_server_local
+
+cat >/etc/ai-development-web.env <<EOF
+ACCESS_MODE=$ACCESS_MODE
+CODE_SERVER_PORT=$CODE_SERVER_PORT
+DEV_USER=$DEV_USER
+EOF
+chmod 0644 /etc/ai-development-web.env
+
+# Headless credential-store support. GNOME Keyring provides the Secret Service
+# implementation; libsecret and Python keyring clients can use it through D-Bus.
+loginctl enable-linger "$DEV_USER" >/dev/null 2>&1 || true
+for profile in "$DEV_HOME/.profile" "$DEV_HOME/.bashrc"; do
+  touch "$profile"
+  if ! grep -Fq 'GPG_TTY' "$profile"; then
+    cat >>"$profile" <<'EOF'
+if tty -s; then
+  export GPG_TTY="$(tty)"
+fi
+EOF
+  fi
+done
+chown "$DEV_USER:$DEV_USER" "$DEV_HOME/.profile" "$DEV_HOME/.bashrc"
+
+cat >/usr/local/bin/keyring-session <<'KEYRING'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+if ! command -v dbus-run-session >/dev/null 2>&1 || ! command -v gnome-keyring-daemon >/dev/null 2>&1; then
+  echo 'GNOME Keyring or D-Bus support is not installed.' >&2
+  exit 1
+fi
+
+if (($# == 0)); then
+  exec dbus-run-session -- bash -lc '
+    eval "$(gnome-keyring-daemon --start --components=secrets,ssh,pkcs11)"
+    export GNOME_KEYRING_CONTROL SSH_AUTH_SOCK
+    exec "${SHELL:-/bin/bash}" -l
+  '
+fi
+
+printf -v command_line '%q ' "$@"
+exec dbus-run-session -- bash -lc "
+  eval \"\$(gnome-keyring-daemon --start --components=secrets,ssh,pkcs11)\"
+  export GNOME_KEYRING_CONTROL SSH_AUTH_SOCK
+  exec $command_line
+"
+KEYRING
+chmod 0755 /usr/local/bin/keyring-session
+
+cat >/usr/local/bin/keyring-status <<'KEYSTATUS'
+#!/usr/bin/env bash
+set -u
+
+failed=0
+for package in gnome-keyring libsecret-tools dbus-user-session python3-keyring pinentry-curses pass; do
+  if dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q 'ok installed'; then
+    printf '[OK]   %-24s installed\n' "$package"
+  else
+    printf '[FAIL] %-24s not installed\n' "$package"
+    failed=1
+  fi
+done
+
+if [[ -n ${DBUS_SESSION_BUS_ADDRESS:-} ]]; then
+  printf '[OK]   D-Bus session address: %s\n' "$DBUS_SESSION_BUS_ADDRESS"
+else
+  printf '[INFO] No D-Bus user session in this shell. Start one with: keyring-session\n'
+fi
+
+if pgrep -u "$(id -u)" -x gnome-keyring-daemon >/dev/null 2>&1; then
+  printf '[OK]   gnome-keyring-daemon is running for this user.\n'
+else
+  printf '[INFO] gnome-keyring-daemon is not running in this shell.\n'
+fi
+
+command -v secret-tool >/dev/null 2>&1 || failed=1
+exit "$failed"
+KEYSTATUS
+chmod 0755 /usr/local/bin/keyring-status
+
 # Selected AI coding agents.
-step "Prepare selected AI coding-agent environment"
 has_agent() {
   local agent=$1
   [[ ",$SELECTED_AGENTS," == *",$agent,"* ]]
@@ -1075,7 +1157,7 @@ install_agent() {
   : >"$agent_log"
   echo "Installing/updating $agent_name..."
   set +e
-  ( trap - ERR; set -Eeuo pipefail; "$@" ) > >(tee -a "$agent_log") 2>&1
+  ( set -Eeuo pipefail; "$@" ) > >(tee -a "$agent_log") 2>&1
   rc=$?
   set -e
   if ((rc == 0)); then
@@ -1089,7 +1171,6 @@ install_agent() {
   return 0
 }
 
-step "Install or update selected AI coding agents: $SELECTED_AGENTS"
 if has_agent gemini || has_agent copilot; then
   install_node22
   run_as_dev npm config set prefix "$DEV_HOME/.local/npm"
@@ -1140,7 +1221,6 @@ printf 'SELECTED_AGENTS=%q\n' "$SELECTED_AGENTS" >/etc/ai-agent-selection
 printf '%s\n' "$DEV_USER" >/etc/ai-development-user
 chmod 0644 /etc/ai-agent-selection /etc/ai-development-user
 
-step "Install the system Robot Framework and RobotCode tool environment"
 # Stable system-level Robot Framework tool environment.
 python3 -m venv /opt/robotframework
 /opt/robotframework/bin/python -m pip install --upgrade pip setuptools wheel
@@ -1151,7 +1231,6 @@ for app in robot rebot libdoc robotcode; do
   fi
 done
 
-step "Create or update the Robot Framework example project"
 # Ready-to-run project-specific virtual environment and example.
 PROJECT=/srv/workspace/robot-demo
 install -d -m 0755 -o "$DEV_USER" -g "$DEV_USER" "$PROJECT/tests" "$PROJECT/.vscode"
@@ -1242,7 +1321,6 @@ fi
 "$PROJECT/.venv/bin/python" -m pip install --upgrade -r "$PROJECT/requirements.txt"
 chown -R "$DEV_USER:$DEV_USER" "$PROJECT"
 
-step "Configure Git defaults for the development user"
 if [[ -n "$GIT_NAME" ]]; then
   runuser -u "$DEV_USER" -- env HOME="$DEV_HOME" git config --global user.name "$GIT_NAME"
 fi
@@ -1252,7 +1330,6 @@ fi
 runuser -u "$DEV_USER" -- env HOME="$DEV_HOME" git config --global init.defaultBranch main
 runuser -u "$DEV_USER" -- env HOME="$DEV_HOME" git config --global pull.rebase false
 
-step "Install code-server extensions from Open VSX"
 # OpenVSX extension installation is best-effort because extension availability can vary.
 install_extension() {
   local extension=$1
@@ -1274,7 +1351,6 @@ if has_agent gemini; then
 fi
 install_extension github.vscode-pull-request-github
 
-step "Install AI-agent and environment helper commands"
 cat >/usr/local/bin/ai-agent-status <<'STATUS'
 #!/usr/bin/env bash
 set -u
@@ -1303,6 +1379,61 @@ show_agent opencode 'OpenCode'           opencode
 STATUS
 chmod 0755 /usr/local/bin/ai-agent-status
 
+cat >/usr/local/bin/web-ide-status <<'WEBSTATUS'
+#!/usr/bin/env bash
+set -u
+
+ACCESS_MODE="unknown"
+CODE_SERVER_PORT="8080"
+DEV_USER=$(cat /etc/ai-development-user 2>/dev/null || echo dev)
+[[ -r /etc/ai-development-web.env ]] && source /etc/ai-development-web.env
+service="code-server@$DEV_USER.service"
+health_url="http://127.0.0.1:$CODE_SERVER_PORT/healthz"
+check_only=0
+[[ ${1:-} == "--check" ]] && check_only=1
+failed=0
+
+service_state=$(systemctl is-active "$service" 2>/dev/null || true)
+listener=$(ss -H -lntp 2>/dev/null | awk -v port=":$CODE_SERVER_PORT" '$4 ~ port "$" {print}')
+health=$(curl -fsS --max-time 4 "$health_url" 2>/dev/null || true)
+
+[[ $service_state == active ]] || failed=1
+[[ -n $listener ]] || failed=1
+[[ $health == *'"status"'* ]] || failed=1
+
+if [[ $ACCESS_MODE == lan ]]; then
+  grep -Eq "(^|[[:space:]])(0\\.0\\.0\\.0|\\*|\\[::\\]):$CODE_SERVER_PORT([[:space:]]|$)" <<<"$listener" || failed=1
+else
+  grep -Eq "(^|[[:space:]])127\\.0\\.0\\.1:$CODE_SERVER_PORT([[:space:]]|$)" <<<"$listener" || failed=1
+fi
+
+if ((check_only == 0)); then
+  printf 'Access mode:     %s\n' "$ACCESS_MODE"
+  printf 'Service:         %s (%s)\n' "$service" "${service_state:-unknown}"
+  printf 'Port:            %s\n' "$CODE_SERVER_PORT"
+  printf 'Listener:        %s\n' "${listener:-not found}"
+  printf 'Local health:    %s\n' "${health:-FAILED}"
+  if [[ $ACCESS_MODE == lan ]]; then
+    while IFS= read -r address; do
+      [[ -n $address ]] && printf 'LAN URL:         http://%s:%s\n' "$address" "$CODE_SERVER_PORT"
+    done < <(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+(\\.[0-9]+){3}$' || true)
+  else
+    printf 'Tunnel URL:      http://127.0.0.1:%s\n' "$CODE_SERVER_PORT"
+  fi
+  if ((failed)); then
+    printf 'Result:          FAILED\n'
+    printf '\nDiagnostics:\n'
+    systemctl status "$service" --no-pager 2>/dev/null || true
+    journalctl -u "$service" -n 40 --no-pager 2>/dev/null || true
+  else
+    printf 'Result:          PASS\n'
+  fi
+fi
+
+exit "$failed"
+WEBSTATUS
+chmod 0755 /usr/local/bin/web-ide-status
+
 cat >/usr/local/bin/dev-environment-status <<'STATUS'
 #!/usr/bin/env bash
 set -u
@@ -1320,6 +1451,10 @@ printf 'code-server:     %s\n' "$(code-server --version 2>&1 | head -n 1)"
 printf 'SSH service:     %s\n' "$(systemctl is-active ssh 2>/dev/null || true)"
 service_user=$(cat /etc/ai-development-user 2>/dev/null || whoami)
 printf 'Web IDE service: %s\n' "$(systemctl is-active "code-server@$service_user" 2>/dev/null || true)"
+printf '\nWeb IDE verification:\n'
+web-ide-status || true
+printf '\nCredential storage:\n'
+keyring-status || true
 printf '\nAI coding agents:\n'
 ai-agent-status
 STATUS
@@ -1481,7 +1616,6 @@ echo 'SSH password authentication is now disabled.'
 EOF
 chmod 0750 /usr/local/sbin/disable-dev-ssh-password
 
-step "Write login guidance and environment summary"
 cat >/etc/motd <<EOF
 
 Multi-Agent AI Development LXC
@@ -1493,18 +1627,19 @@ Agent menu:         ai-agent-menu
 Agent status:       ai-agent-status
 Agent help:         ai-agent-help
 Environment status: dev-environment-status
+Web IDE check:      web-ide-status
+Keyring check:      keyring-status
+Keyring shell:      keyring-session
 Provider key file:  ~/.config/ai-agents/env
 Web IDE service:    systemctl status code-server@$DEV_USER
 
 EOF
 
 # Smoke test the installed Robot Framework environment.
-step "Run the Robot Framework smoke test"
 cd "$PROJECT"
 "$PROJECT/.venv/bin/python" -m robot --outputdir results tests
 chown -R "$DEV_USER:$DEV_USER" "$PROJECT/results"
 
-step "Finalize provisioning and summarize results"
 rm -f /root/claude-dev.env
 if ((${#FAILED_AGENTS[@]} > 0)); then
   printf '%s\n' "${FAILED_AGENTS[@]}" >/var/log/ai-agent-install-failures
@@ -1514,16 +1649,12 @@ if ((${#FAILED_AGENTS[@]} > 0)); then
   exit 20
 fi
 rm -f /var/log/ai-agent-install-failures
-PROVISION_ELAPSED=$(( $(date +%s) - PROVISION_STARTED ))
-printf '[%s] Provisioning completed successfully in %ss\n' "$(date '+%F %T')" "$PROVISION_ELAPSED"
-printf '[%s] Full LXC log: %s\n' "$(date '+%F %T')" "$LOG_FILE"
+printf '[%s] Provisioning completed\n' "$(date '+%F %T')"
 PROVISION
   chmod 0700 "$provision_file"
 
-  run_logged_step "Copy provisioning configuration into LXC $CTID" \
-    pct push "$CTID" "$env_file" /root/claude-dev.env --perms 0600
-  run_logged_step "Copy provisioning program into LXC $CTID" \
-    pct push "$CTID" "$provision_file" /root/claude-dev-provision.sh --perms 0700
+  pct push "$CTID" "$env_file" /root/claude-dev.env --perms 0600 >>"$LOG_FILE" 2>&1
+  pct push "$CTID" "$provision_file" /root/claude-dev-provision.sh --perms 0700 >>"$LOG_FILE" 2>&1
   rm -rf "$tmp_dir"
 }
 
@@ -1536,8 +1667,7 @@ provision_container() {
 This includes package upgrades, code-server, selected AI coding agents, Python, Robot Framework, GitHub CLI, helper commands, and a smoke test."
 
   set +e
-  run_logged_step "Provision software inside LXC $CTID" \
-    pct exec "$CTID" -- /root/claude-dev-provision.sh
+  pct exec "$CTID" -- /root/claude-dev-provision.sh >>"$LOG_FILE" 2>&1
   rc=$?
   set -e
 
@@ -1551,7 +1681,9 @@ This includes package upgrades, code-server, selected AI coding agents, Python, 
   fi
 
   pct exec "$CTID" -- rm -f /root/claude-dev-provision.sh /root/claude-dev.env >/dev/null 2>&1 || true
-  run_logged_step "Enable deletion protection for LXC $CTID" pct set "$CTID" --protection 1
+  pct set "$CTID" --protection 1 >>"$LOG_FILE" 2>&1
+
+  verify_web_ide_access
 }
 
 get_ct_ipv4() {
@@ -1569,6 +1701,64 @@ wait_for_ct_ipv4() {
     sleep 2
     ((count += 1))
   done
+  return 1
+}
+
+verify_web_ide_access() {
+  local ip=""
+  local health_url=""
+  local response=""
+  local attempt=0
+
+  log "Verifying code-server inside LXC $CTID"
+  if ! pct exec "$CTID" -- /usr/local/bin/web-ide-status --check >>"$LOG_FILE" 2>&1; then
+    pct exec "$CTID" -- /usr/local/bin/web-ide-status >>"$LOG_FILE" 2>&1 || true
+    show_error_details "code-server failed its internal service, listener, or HTTP health verification in LXC $CTID. The container was left intact for diagnosis."
+    return 1
+  fi
+
+  if [[ "$ACCESS_MODE" != "lan" ]]; then
+    log "code-server internal verification passed in tunnel mode"
+    return 0
+  fi
+
+  ip=$(wait_for_ct_ipv4 || true)
+  if [[ -z "$ip" ]]; then
+    show_error_details "code-server is healthy inside LXC $CTID, but the container IPv4 address could not be detected."
+    return 1
+  fi
+
+  health_url="http://$ip:$CODE_SERVER_PORT/healthz"
+  log "Verifying direct LAN access from the Proxmox host: $health_url"
+  for attempt in $(seq 1 20); do
+    response=$(curl -fsS --max-time 4 "$health_url" 2>>"$LOG_FILE" || true)
+    if [[ "$response" == *'"status"'* ]]; then
+      log "Direct LAN HTTP verification passed: $response"
+      return 0
+    fi
+    sleep 1
+  done
+
+  {
+    echo "Direct LAN HTTP verification failed: $health_url"
+    echo "Container configuration:"
+    pct config "$CTID" || true
+    echo
+    echo "Container web status:"
+    pct exec "$CTID" -- /usr/local/bin/web-ide-status || true
+    echo
+    echo "Container routes:"
+    pct exec "$CTID" -- ip route || true
+    echo
+    echo "Proxmox firewall status:"
+    command -v pve-firewall >/dev/null 2>&1 && pve-firewall status || true
+  } >>"$LOG_FILE" 2>&1
+
+  show_error_details "code-server is running inside LXC $CTID, but it is not reachable from the Proxmox host at:
+
+$health_url
+
+Check the LXC network address, bridge/VLAN, and Proxmox firewall rules for TCP port $CODE_SERVER_PORT. Run the helper's Web IDE verification action after correcting the network policy."
   return 1
 }
 
@@ -1654,11 +1844,14 @@ $CODE_SERVER_PASSWORD"
 Detected address: ${ip:-not detected}
 Development user: $DEV_USER
 Selected AI agents: $(selected_agents_display)
+Web IDE check: PASS
 ${DEV_PASSWORD:+Initial SSH password: $DEV_PASSWORD
 }
 $access_text
 
 After SSH login, run:
+  web-ide-status
+  keyring-status
   ai-agent-menu
 
 Use the menu to authenticate GitHub, launch each selected agent, configure optional provider API keys, and update agents. Run ai-agent-help for agent-specific first-login instructions.
@@ -1703,15 +1896,13 @@ new_installation() {
   fi
 
   configuration_summary || return 0
-  begin_verbose_output
-  console_log INFO "Beginning new installation for LXC $CTID ($CT_HOSTNAME)"
 
   if ! create_container; then
     if pct status "$CTID" >/dev/null 2>&1; then
       if ask_yes_no "CLEANUP" "The deployment did not complete. Destroy incomplete LXC $CTID?" no; then
         pct set "$CTID" --protection 0 >/dev/null 2>&1 || true
         pct stop "$CTID" --skiplock 1 >/dev/null 2>&1 || true
-        run_logged_step "Destroy incomplete LXC $CTID" pct destroy "$CTID" --purge 1 || true
+        pct destroy "$CTID" --purge 1 >>"$LOG_FILE" 2>&1 || true
       fi
     fi
     return 0
@@ -1785,7 +1976,7 @@ update_managed_container() {
 
   if [[ "$(pct status "$CTID" 2>/dev/null | awk '{print $2}')" != "running" ]]; then
     msg_info "Starting LXC $CTID…"
-    run_logged_step "Start LXC $CTID" pct start "$CTID"
+    pct start "$CTID" >>"$LOG_FILE" 2>&1
     sleep 3
   fi
 
@@ -1795,6 +1986,25 @@ $(selected_agents_display)
 
 Change which AI coding agents are installed or updated? Existing agents are not automatically removed when deselected." no; then
     choose_ai_agents || return 0
+  fi
+
+  if ask_yes_no "WEB IDE ACCESS" \
+    "Current Web IDE mode: $ACCESS_MODE
+Current port: $CODE_SERVER_PORT
+
+Change the code-server access mode or TCP port?" no; then
+    local web_choice
+    web_choice=$(menu_box "WEB IDE ACCESS" \
+      "Choose how code-server will be exposed." \
+      "lan" "Direct LXC IP access with password authentication" \
+      "tunnel" "Loopback only; connect through an SSH tunnel") || return 0
+    ACCESS_MODE=$web_choice
+    prompt_integer CODE_SERVER_PORT "WEB IDE PORT" "code-server TCP port:" "$CODE_SERVER_PORT" 1024 65535 || return 0
+    if [[ "$ACCESS_MODE" == "lan" && -z "$CODE_SERVER_PASSWORD" ]]; then
+      CODE_SERVER_PASSWORD=$(openssl rand -hex 16)
+    elif [[ "$ACCESS_MODE" == "tunnel" ]]; then
+      CODE_SERVER_PASSWORD=""
+    fi
   fi
 
   if ! ask_yes_no "UPDATE / REPAIR" \
@@ -1808,11 +2018,6 @@ Selected agents: $(selected_agents_display)" yes; then
     return 0
   fi
 
-  begin_verbose_output
-  console_log INFO "Beginning update/repair for managed LXC $CTID"
-  run_logged_step "Set Proxmox web console mode to direct shell" pct set "$CTID" --cmode shell
-  ACCESS_MODE="lan"
-  [[ -n "$CODE_SERVER_PASSWORD" ]] || CODE_SERVER_PASSWORD=$(openssl rand -hex 16)
   if ! provision_container; then
     msg_warn "LXC $CTID is still incomplete. Review the provisioning log and retry Update/repair.
 
@@ -1850,7 +2055,7 @@ This is intended for containers left intact after an earlier provisioning failur
 
   if [[ "$(pct status "$CTID" 2>/dev/null | awk '{print $2}')" != "running" ]]; then
     msg_info "Starting LXC $CTID…"
-    run_logged_step "Start LXC $CTID" pct start "$CTID"
+    pct start "$CTID" >>"$LOG_FILE" 2>&1
     sleep 3
   fi
 
@@ -1866,9 +2071,13 @@ This is intended for containers left intact after an earlier provisioning failur
     bind_addr=$(pct exec "$CTID" -- awk -F': ' '$1 == "bind-addr" {print $2; exit}' "$detected_config" 2>/dev/null || true)
     CODE_SERVER_PORT=${bind_addr##*:}
     [[ "$CODE_SERVER_PORT" =~ ^[0-9]+$ ]] || CODE_SERVER_PORT="$DEFAULT_PORT"
-    ACCESS_MODE="lan"
-    CODE_SERVER_PASSWORD=$(pct exec "$CTID" -- sed -n 's/^password:[[:space:]]*//p' "$detected_config" 2>/dev/null | head -n1 || true)
-    [[ -n "$CODE_SERVER_PASSWORD" ]] || CODE_SERVER_PASSWORD=$(openssl rand -hex 16)
+    if [[ "$bind_addr" == 127.0.0.1:* || "$bind_addr" == localhost:* ]]; then
+      ACCESS_MODE="tunnel"
+      CODE_SERVER_PASSWORD=""
+    else
+      ACCESS_MODE="lan"
+      CODE_SERVER_PASSWORD=$(pct exec "$CTID" -- sed -n 's/^password:[[:space:]]*//p' "$detected_config" 2>/dev/null | head -n1 || true)
+    fi
   else
     DEV_USER=$(input_box "DEVELOPMENT USER" \
       "code-server configuration was not detected. Enter the development username." "$DEFAULT_USER") || return 0
@@ -1909,9 +2118,6 @@ Existing projects under /srv/workspace are preserved." yes; then
   fi
 
   write_state_file
-  begin_verbose_output
-  console_log INFO "Beginning adoption and repair for existing LXC $CTID"
-  run_logged_step "Set Proxmox web console mode to direct shell" pct set "$CTID" --cmode shell
   if ! provision_container; then
     msg_warn "LXC $CTID was registered, but repair is still incomplete. Review the log and retry Update/repair.
 
@@ -1964,11 +2170,37 @@ $access
 
 Useful host commands:
 pct enter $CTID
+pct exec $CTID -- web-ide-status
+pct exec $CTID -- keyring-status
 pct exec $CTID -- systemctl status code-server@$DEV_USER
 pct exec $CTID -- tail -n 100 /var/log/claude-dev-provision.log
 
 State file:
 $STATE_DIR/$CTID.conf" 25 88
+}
+
+verify_managed_web_ide() {
+  local id
+  local ip
+  id=$(select_managed_ctid "Select a container whose web IDE should be verified.") || return 0
+  load_state "$id"
+  CTID=$id
+
+  if [[ "$(pct status "$CTID" 2>/dev/null | awk '{print $2}')" != "running" ]]; then
+    msg_warn "LXC $CTID is not running. Start it before verification."
+    return 0
+  fi
+
+  if verify_web_ide_access; then
+    ip=$(get_ct_ipv4)
+    if [[ "$ACCESS_MODE" == "lan" ]]; then
+      whiptail --backtitle "$BACKTITLE" --title "WEB IDE VERIFIED" --msgbox \
+        "Service, listener, internal HTTP health, and Proxmox-host LAN access all passed.\n\nOpen:\nhttp://${ip:-CONTAINER_IP}:${CODE_SERVER_PORT}" 14 78
+    else
+      whiptail --backtitle "$BACKTITLE" --title "WEB IDE VERIFIED" --msgbox \
+        "Service, loopback listener, and internal HTTP health all passed.\n\nThis container is configured for SSH-tunnel access on port $CODE_SERVER_PORT." 14 78
+    fi
+  fi
 }
 
 open_container_shell() {
@@ -1992,21 +2224,23 @@ main_menu() {
       "1" "Create a new headless development LXC" \
       "2" "Update or repair a managed development LXC" \
       "3" "Adopt and repair an incomplete existing LXC" \
-      "4" "Show access and status information" \
-      "5" "Open a managed container console" \
-      "6" "Show this run's log file" \
-      "7" "Exit") || break
+      "4" "Verify Web IDE service and HTTP access" \
+      "5" "Show access and status information" \
+      "6" "Open a managed container console" \
+      "7" "Show this run's log file" \
+      "8" "Exit") || break
 
     case "$choice" in
       1) new_installation ;;
       2) update_managed_container ;;
       3) adopt_existing_container ;;
-      4) show_managed_info ;;
-      5) open_container_shell ;;
-      6)
+      4) verify_managed_web_ide ;;
+      5) show_managed_info ;;
+      6) open_container_shell ;;
+      7)
         whiptail --backtitle "$BACKTITLE" --title "RUN LOG" --scrolltext --textbox "$LOG_FILE" 30 100
         ;;
-      7) break ;;
+      8) break ;;
     esac
   done
 }
@@ -2026,9 +2260,9 @@ main() {
 • Python and virtual environments
 • Robot Framework and RobotCode
 • Git and GitHub CLI
-• Direct DHCP/LAN SSH and code-server access
-• Proxmox web console fixed with direct shell mode
-• Agent-management helpers and build tools
+• Verified code-server service, listener, and HTTP health checks
+• GNOME Keyring, libsecret, Python keyring, pass, and headless PIN entry
+• SSH access, agent-management helpers, and build tools
 
 The script runs on the Proxmox host and provisions the LXC automatically." 22 82
 

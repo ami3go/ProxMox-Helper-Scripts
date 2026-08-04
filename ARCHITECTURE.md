@@ -11,8 +11,7 @@ This repository is a catalog and execution framework for independent Proxmox hel
 ├── helpers/
 │   └── <helper-id>/
 │       ├── manifest.env             Static registry metadata
-│       ├── install.sh               Primary helper entrypoint
-│       ├── post-install.sh          Optional existing-environment entrypoint
+│       ├── install.sh               Helper entrypoint
 │       ├── README.md                Helper documentation
 │       ├── assets/                  Screenshots, diagrams, icons
 │       ├── files/                   Static payload files
@@ -55,9 +54,8 @@ Moving a helper between catalog categories therefore requires only a manifest ch
 4. `manifest.env` contains literal metadata only. CI rejects expressions, shell statements, and unsupported fields.
 5. The launcher discovers helper packages dynamically. Adding one valid folder automatically adds it to the catalog.
 6. Every helper is exported as a complete ZIP and TAR.GZ bundle, so additional files are never lost.
-7. A helper may declare `HELPER_POST_INSTALL` for a second executable that configures an existing environment.
-8. A helper may additionally publish a standalone `.sh` file only when `HELPER_STANDALONE="true"` and the primary entrypoint is genuinely self-contained.
-9. Generated files (`HELPERS.md` and `docs/data/helpers.json`) are derived from manifests and checked by CI.
+7. A helper may additionally publish a single standalone `.sh` file only when `HELPER_STANDALONE="true"` and the entrypoint is genuinely self-contained.
+8. Generated files (`HELPERS.md` and `docs/data/helpers.json`) are derived from manifests and checked by CI.
 
 ## Resolving helper-local files
 
@@ -79,8 +77,7 @@ Tagged releases contain:
 
 - full repository ZIP and TAR.GZ archives
 - a complete ZIP and TAR.GZ bundle for every helper folder
-- optional standalone primary entrypoints for self-contained helpers
-- optional standalone post-install entrypoints when declared in the manifest
+- optional standalone entrypoint scripts for self-contained helpers
 - generated helper catalog JSON
 - SHA-256 checksums
 
@@ -88,4 +85,4 @@ The complete helper bundle is the canonical release form when an installer depen
 
 ## Compatibility
 
-`proxmox-ai-dev-lxc.sh` remains a repository-level compatibility launcher. Tagged releases also publish the self-contained AI Development LXC installer, its post-install utility, and a complete `ai-dev-lxc` helper bundle.
+`proxmox-ai-dev-lxc.sh` remains a repository-level compatibility launcher. Tagged releases also publish the self-contained AI Development LXC installer and a complete `ai-dev-lxc` helper bundle.

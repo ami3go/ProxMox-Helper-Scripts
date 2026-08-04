@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 set -Eeuo pipefail
 
-readonly LAUNCHER_VERSION="2.3.0"
+readonly LAUNCHER_VERSION="2.2.2"
 ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=../lib/common.sh
 source "$ROOT_DIR/lib/common.sh"
@@ -22,7 +22,6 @@ Usage:
   proxmox-helper-scripts search TERM            Search IDs, names, categories, tags, and descriptions
   proxmox-helper-scripts info ID                Show helper metadata
   proxmox-helper-scripts run ID [ARGS]          Execute a helper
-  proxmox-helper-scripts post-install ID [ARGS] Run a helper post-install action
   proxmox-helper-scripts validate               Validate registered manifests
   proxmox-helper-scripts version                Show launcher version
   proxmox-helper-scripts help                   Show this help
@@ -82,7 +81,6 @@ Maintainer:  ${HELPER_MAINTAINER:-not specified}
 Entrypoint:  ${PH_HELPER_DIR#$ROOT_DIR/}/$HELPER_ENTRYPOINT
 Documentation: ${HELPER_DOCS:-README.md}
 Standalone release: ${HELPER_STANDALONE:-false}
-Post-install: ${HELPER_POST_INSTALL:-not provided}
 EOF_INFO
 }
 
@@ -138,40 +136,16 @@ Category: $HELPER_CATEGORY
 Version: $HELPER_VERSION
 Target: $HELPER_TARGET
 
-$HELPER_DESCRIPTION"
-      if ph_tui_available; then
-        if [[ -n ${HELPER_POST_INSTALL:-} ]]; then
-          action=$(whiptail --title "$HELPER_NAME" --menu "$details" 22 88 10 \
-            "install" "Create and provision a new environment" \
-            "post-install" "Configure an existing environment" \
-            "back" "Return to helper list" 3>&1 1>&2 2>&3) || continue
-          case $action in
-            install) ph_registry_run "$choice" ;;
-            post-install) ph_registry_post_install "$choice" ;;
-            *) continue ;;
-          esac
-        elif whiptail --title "$HELPER_NAME" --yesno "$details
+$HELPER_DESCRIPTION
 
-Run this helper now?" 20 84; then
+Run this helper now?"
+      if ph_tui_available; then
+        if whiptail --title "$HELPER_NAME" --yesno "$details" 20 84; then
           ph_registry_run "$choice"
         fi
       else
-        printf '
-%s
-
-' "$details"
-        if [[ -n ${HELPER_POST_INSTALL:-} ]]; then
-          printf '1) Install new environment
-2) Post-install existing environment
-q) Back
-'
-          read -r -p 'Select: ' action
-          case $action in
-            1) ph_registry_run "$choice" ;;
-            2) ph_registry_post_install "$choice" ;;
-            *) continue ;;
-          esac
-        elif ph_confirm 'Run this helper now?' no; then
+        printf '\n%s\n\n' "$details"
+        if ph_confirm 'Run this helper now?' no; then
           ph_registry_run "$choice"
         fi
       fi
@@ -206,13 +180,6 @@ main() {
       [[ -n $id ]] || ph_die 'Helper ID is required.'
       shift
       ph_registry_run "$id" "$@"
-      ;;
-    post-install)
-      shift
-      local id=${1:-}
-      [[ -n $id ]] || ph_die 'Helper ID is required.'
-      shift
-      ph_registry_post_install "$id" "$@"
       ;;
     validate)
       validate_registry

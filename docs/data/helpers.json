@@ -5,8 +5,8 @@
       "id": "ai-dev-lxc",
       "name": "AI Development LXC",
       "category": "development",
-      "version": "2.3.0",
-      "description": "Create or post-configure a headless Debian LXC with direct DHCP/LAN access, code-server, Python, Robot Framework, GitHub tooling, and AI coding agents.",
+      "version": "2.2.2",
+      "description": "Create and maintain a headless Debian LXC with verified code-server LAN access, credential keyrings, Python, Robot Framework, GitHub tooling, and selectable AI coding agents.",
       "target": "proxmox-host",
       "tags": [
         "ai",
@@ -15,14 +15,13 @@
         "python",
         "robot-framework",
         "code-server",
-        "claude",
-        "post-install"
+        "keyring",
+        "health-check"
       ],
       "path": "helpers/ai-dev-lxc",
       "entrypoint": "helpers/ai-dev-lxc/install.sh",
-      "postInstall": "helpers/ai-dev-lxc/post-install.sh",
       "docs": "helpers/ai-dev-lxc/README.md",
-      "bundle": "ai-dev-lxc-bundle-v2.3.0.zip",
+      "bundle": "ai-dev-lxc-bundle-v2.2.2.zip",
       "standalone": true
     }
   ]

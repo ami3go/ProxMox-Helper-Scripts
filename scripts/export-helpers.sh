@@ -34,12 +34,4 @@ while IFS= read -r manifest; do
       cp "$helper_dir/$HELPER_ENTRYPOINT" "$DEST/proxmox-ai-dev-lxc.sh"
     fi
   fi
-
-  if [[ -n ${HELPER_POST_INSTALL:-} ]]; then
-    cp "$helper_dir/$HELPER_POST_INSTALL" "$DEST/${HELPER_ID}-post-install.sh"
-    cp "$helper_dir/$HELPER_POST_INSTALL" "$DEST/${HELPER_ID}-post-install-v${HELPER_VERSION}.sh"
-    if [[ $HELPER_ID == ai-dev-lxc ]]; then
-      cp "$helper_dir/$HELPER_POST_INSTALL" "$DEST/proxmox-ai-dev-lxc-post-install.sh"
-    fi
-  fi
 done < <(find helpers -mindepth 2 -maxdepth 2 -name manifest.env -type f | sort)

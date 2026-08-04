@@ -23,11 +23,10 @@ The filesystem directory is identified only by `HELPER_ID`. `HELPER_CATEGORY` is
 - `HELPER_TAGS`: comma-separated search tags
 - `HELPER_MAINTAINER`: maintainer label
 - `HELPER_DOCS`: helper documentation path
-- `HELPER_STANDALONE`: `true` only when the primary entrypoint can run without other package files
-- `HELPER_POST_INSTALL`: optional executable file for configuring an already-created environment
+- `HELPER_STANDALONE`: `true` only when the entrypoint can run without other package files
 
 Every helper package must also contain the standard directories `assets/`, `files/`, `lib/`, `templates/`, and `tests/`. They may contain only a README until needed.
 
 Manifest values must be literal strings. Command substitution, variable expansion, arithmetic, command separators, and arbitrary shell statements are rejected.
 
-Every helper is packaged as a complete ZIP and TAR.GZ bundle. Standalone scripts are additional assets, not a replacement for helper bundles. When `HELPER_POST_INSTALL` is set, the launcher exposes `post-install ID`, validates the file, and publishes it as an additional release asset.
+Every helper is packaged as a complete ZIP and TAR.GZ bundle. Standalone scripts are additional assets, not a replacement for helper bundles.

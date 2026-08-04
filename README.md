@@ -6,7 +6,7 @@
 
 An extensible, manifest-driven repository for interactive Proxmox VE helper scripts.
 
-The repository currently includes the **AI Development LXC** helper, which can either create a new headless Debian container or post-configure an existing LXC with code-server, Python, Robot Framework, GitHub tooling, and AI coding agents. The surrounding structure is designed so additional LXC, VM, storage, networking, backup, monitoring, and development helpers can be added without rebuilding the catalog, release, documentation, and validation infrastructure.
+The repository currently includes the **AI Development LXC** helper, which creates a headless Debian container with code-server, Python, Robot Framework, GitHub tooling, and selectable AI coding agents. The surrounding structure is designed so additional LXC, VM, storage, networking, backup, monitoring, and development helpers can be added without rebuilding the catalog, release, documentation, and validation infrastructure.
 
 ## Repository goals
 
@@ -42,12 +42,6 @@ Run a helper directly by ID:
 ./bin/proxmox-helper-scripts run ai-dev-lxc
 ```
 
-Post-configure an LXC that you already created:
-
-```bash
-./bin/proxmox-helper-scripts post-install ai-dev-lxc
-```
-
 Inspect its metadata first:
 
 ```bash
@@ -60,7 +54,7 @@ See [HELPERS.md](HELPERS.md) for the generated catalog.
 
 | ID | Helper | Category | Purpose |
 |---|---|---|---|
-| `ai-dev-lxc` | AI Development LXC | `development` | Create a new AI development LXC or configure an existing container. |
+| `ai-dev-lxc` | AI Development LXC | `development` | Create and maintain a headless multi-agent development container. |
 
 ## Directory layout
 
@@ -71,8 +65,7 @@ See [HELPERS.md](HELPERS.md) for the generated catalog.
 ├── helpers/
 │   └── <helper-id>/
 │       ├── manifest.env             Static registry metadata
-│       ├── install.sh               New-environment entrypoint
-│       ├── post-install.sh          Optional existing-environment entrypoint
+│       ├── install.sh               Executable helper entrypoint
 │       ├── README.md                Helper-specific documentation
 │       ├── assets/                  Screenshots, diagrams, and icons
 │       ├── files/                   Static payload files
@@ -140,7 +133,6 @@ HELPER_CATEGORY="storage"
 HELPER_VERSION="0.1.0"
 HELPER_DESCRIPTION="Create and maintain a headless backup server container."
 HELPER_ENTRYPOINT="install.sh"
-HELPER_POST_INSTALL="post-install.sh"
 HELPER_TARGET="proxmox-host"
 HELPER_TAGS="storage,backup,lxc"
 HELPER_MAINTAINER="Repository maintainers"
@@ -164,21 +156,16 @@ The first included helper provisions:
 - GitHub Copilot CLI
 - Aider
 - OpenCode
-- direct DHCP/LAN SSH and password-protected code-server access
-- Proxmox web-console repair with `cmode=shell`
+- direct password-protected LAN access by default, with optional SSH-tunnel mode
 - a Robot Framework starter project
+- verified code-server systemd state, listener address, `/healthz`, and Proxmox-host LAN reachability
+- GNOME Keyring, libsecret, Python keyring, `pass`, and text-mode PIN entry without a desktop environment
 - update and repair flows that preserve `/srv/workspace`
 
-Create and provision a new container:
+Run it from the catalog:
 
 ```bash
 ./bin/proxmox-helper-scripts run ai-dev-lxc
-```
-
-Post-configure an existing Debian LXC:
-
-```bash
-./bin/proxmox-helper-scripts post-install ai-dev-lxc
 ```
 
 Direct repository execution also remains available:
@@ -187,14 +174,13 @@ Direct repository execution also remains available:
 ./helpers/ai-dev-lxc/install.sh
 ```
 
-Repository-level compatibility wrappers remain available:
+The legacy repository command remains as a compatibility wrapper:
 
 ```bash
 ./proxmox-ai-dev-lxc.sh
-./proxmox-ai-dev-lxc-post-install.sh
 ```
 
-Tagged releases publish the standalone new-container helper as `ai-dev-lxc.sh` and `proxmox-ai-dev-lxc.sh`, plus the existing-container utility as `ai-dev-lxc-post-install.sh`.
+Tagged releases publish the actual standalone helper as both `ai-dev-lxc.sh` and `proxmox-ai-dev-lxc.sh`.
 
 ## Development commands
 
@@ -224,7 +210,7 @@ The repository validation covers:
 - unique helper IDs and directory alignment
 - executable and documented helper entrypoints
 - helper manifest version alignment with `SCRIPT_VERSION`, where present
-- embedded new-install and post-install provisioner syntax for the AI Development LXC
+- embedded provisioner syntax for the AI Development LXC
 - generated catalog freshness
 - framework and helper smoke tests
 - required GitHub Pages assets and action versions
@@ -244,10 +230,7 @@ helper-catalog.json
 <helper-id>-bundle-v<helper-version>.tar.gz
 <helper-id>.sh
 <helper-id>-v<helper-version>.sh
-<helper-id>-post-install.sh
-<helper-id>-post-install-v<helper-version>.sh
 proxmox-ai-dev-lxc.sh
-proxmox-ai-dev-lxc-post-install.sh
 SHA256SUMS
 ```
 
@@ -298,6 +281,6 @@ Report vulnerabilities privately according to [SECURITY.md](SECURITY.md).
 
 [MIT](LICENSE)
 
-## Configuring or repairing an existing LXC
+## Repairing a failed Claude Code installation
 
-Release 2.3.0 adds a dedicated post-install workflow. Run `./bin/proxmox-helper-scripts post-install ai-dev-lxc`, select the CTID, and follow the TUI. It configures DHCP, direct LAN SSH and code-server access, Claude Code, Python/Robot Framework, and `cmode=shell` for the Proxmox web console. Host logs are stored under `/var/log/ai-dev-lxc-post-install/`; the complete in-container log is `/var/log/ai-dev-post-install.log`.
+Release 2.2.2 verifies the code-server service, listener, local `/healthz` response, and direct LAN reachability from the Proxmox host before reporting deployment success. It also installs headless GNOME Keyring/libsecret and text-mode credential tooling. For an existing managed LXC, run the helper and select **Update or repair a managed development LXC**, then use **Verify Web IDE service and HTTP access**. Claude Code remains installed through Anthropic's signed Debian APT repository, and per-agent logs remain under `/var/log/ai-agent-<agent>-install.log`.

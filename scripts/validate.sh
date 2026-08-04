@@ -11,7 +11,7 @@ fail() {
 
 printf 'Checking Bash syntax...\n'
 mapfile -t bash_files < <(find bin helpers lib scripts tests -type f \( -name '*.sh' -o -path '*/proxmox-helper-scripts' \) -print | sort)
-bash_files+=(proxmox-ai-dev-lxc.sh proxmox-ai-dev-lxc-post-install.sh)
+bash_files+=(proxmox-ai-dev-lxc.sh)
 for file in "${bash_files[@]}"; do
   bash -n "$file"
 done
@@ -40,14 +40,6 @@ while IFS= read -r manifest; do
     fail "$entry has SCRIPT_VERSION=$script_version but manifest has HELPER_VERSION=$HELPER_VERSION"
   fi
   [[ -x $entry ]] || fail "Helper entrypoint is not executable: $entry"
-  if [[ -n ${HELPER_POST_INSTALL:-} ]]; then
-    post_entry="$helper_dir/$HELPER_POST_INSTALL"
-    post_version=$(sed -n 's/^readonly SCRIPT_VERSION="\([^"]*\)"/\1/p' "$post_entry" | head -n 1)
-    if [[ -n $post_version && $post_version != "$HELPER_VERSION" ]]; then
-      fail "$post_entry has SCRIPT_VERSION=$post_version but manifest has HELPER_VERSION=$HELPER_VERSION"
-    fi
-    [[ -x $post_entry ]] || fail "Post-install entrypoint is not executable: $post_entry"
-  fi
 done < <(find helpers -mindepth 2 -maxdepth 2 -name manifest.env -type f | sort)
 
 printf 'Checking embedded AI Development LXC provisioner syntax...\n'
@@ -63,17 +55,6 @@ awk '
 ' helpers/ai-dev-lxc/install.sh >"$tmp"
 [[ -s $tmp ]] || fail 'Could not extract the embedded provisioner.'
 bash -n "$tmp"
-
-printf 'Checking embedded post-install provisioner syntax...\n'
-post_tmp=$(mktemp)
-trap 'rm -f "$tmp" "$post_tmp" ${catalog_md:+"$catalog_md"} ${catalog_json:+"$catalog_json"}; rm -rf ${export_dir:+"$export_dir"}' EXIT
-awk '
-  /cat >"\$provision_file" <<'"'"'PROVISION'"'"'/ {capture=1; next}
-  capture && /^PROVISION$/ {exit}
-  capture {print}
-' helpers/ai-dev-lxc/post-install.sh >"$post_tmp"
-[[ -s $post_tmp ]] || fail 'Could not extract the embedded post-install provisioner.'
-bash -n "$post_tmp"
 
 printf 'Checking generated catalogs...\n'
 catalog_md=$(mktemp)
@@ -100,14 +81,10 @@ done
 printf 'Checking helper bundle export...\n'
 export_dir=$(mktemp -d)
 ./scripts/export-helpers.sh "$export_dir"
-ai_version=$(awk -F= '$1 == "HELPER_VERSION" {gsub(/"/, "", $2); print $2}' helpers/ai-dev-lxc/manifest.env)
-ai_bundle="$export_dir/ai-dev-lxc-bundle-v${ai_version}.zip"
-[[ -f $ai_bundle ]] || fail 'AI helper ZIP bundle was not exported.'
-[[ -f $export_dir/ai-dev-lxc-bundle-v${ai_version}.tar.gz ]] || fail 'AI helper TAR.GZ bundle was not exported.'
+[[ -f $export_dir/ai-dev-lxc-bundle-v2.2.2.zip ]] || fail 'AI helper ZIP bundle was not exported.'
+[[ -f $export_dir/ai-dev-lxc-bundle-v2.2.2.tar.gz ]] || fail 'AI helper TAR.GZ bundle was not exported.'
 [[ -f $export_dir/ai-dev-lxc.sh ]] || fail 'AI standalone helper was not exported.'
-[[ -f $export_dir/ai-dev-lxc-post-install.sh ]] || fail 'AI post-install helper was not exported.'
-unzip -l "$ai_bundle" | grep -Fq 'ai-dev-lxc/files/README.md' || fail 'Helper bundle does not contain resource files.'
-unzip -l "$ai_bundle" | grep -Fq 'ai-dev-lxc/post-install.sh' || fail 'Helper bundle does not contain post-install.sh.'
+unzip -l "$export_dir/ai-dev-lxc-bundle-v2.2.2.zip" | grep -Fq 'ai-dev-lxc/files/README.md' || fail 'Helper bundle does not contain resource files.'
 
 for file in docs/index.html docs/styles.css docs/app.js docs/404.html docs/.nojekyll docs/data/helpers.json; do
   [[ -f $file ]] || fail "Missing Pages file: $file"
