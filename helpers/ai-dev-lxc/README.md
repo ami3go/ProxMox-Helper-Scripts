@@ -1,79 +1,160 @@
-# AI Development LXC
+# AI Development LXC helper v2.2.7
 
-Creates an unprivileged Debian LXC on a Proxmox VE node and provisions a headless AI-assisted development workstation.
+This helper extends the v2.2.6 AI Development LXC service layout with:
 
-## Included
+- **OpenAI Codex CLI** installed for the non-root development user.
+- **Homepage v1.13.2** as a Docker-based start page bound only to `127.0.0.1:3000`.
+- **Caddy** as the native systemd reverse proxy for Homepage, code-server, FileBrowser Quantum, and Termix.
+- Friendly `home.arpa` hostnames, DNS instructions, management commands, validation, backups, and automatic binding rollback.
 
-- code-server browser IDE
-- Python virtual environments
-- Robot Framework and RobotCode
-- Git and GitHub CLI
-- Claude Code, Codex CLI, Gemini CLI, GitHub Copilot CLI, Aider, and OpenCode selection
-- direct password-protected LAN access by default, with optional SSH-tunnel mode
-- post-install service, socket, `/healthz`, and Proxmox-host reachability verification
-- GNOME Keyring, Secret Service/libsecret, Python keyring, `pass`, and curses PIN entry
-- `web-ide-status`, `keyring-status`, and `keyring-session` diagnostic helpers
-- update, repair, adoption, and standalone web-verification workflows
+The helper preserves existing project files, application authentication, FileBrowser data, and the Termix `termix-data` volume.
 
-## Run from the repository
+## Run from the Proxmox host
 
 ```bash
-./bin/proxmox-helper-scripts run ai-dev-lxc
+sudo ./helpers/ai-dev-lxc/install.sh
 ```
 
-Direct execution remains supported:
+Or select the container without the menu:
 
 ```bash
-./helpers/ai-dev-lxc/install.sh
+sudo ./helpers/ai-dev-lxc/install.sh --ctid 123
 ```
 
-A standalone copy is included in tagged release assets as `ai-dev-lxc.sh` and retained under the legacy name `proxmox-ai-dev-lxc.sh`.
+The target must already be an AI Development LXC created by the v2.2.x base helper. The script starts the LXC when necessary, detects existing services, transfers its modular payload, runs provisioning inside the guest, updates the existing managed state, and validates the routes from the Proxmox node.
 
-When extracted from a helper bundle, run:
+## Run inside the LXC
 
 ```bash
-cd ai-dev-lxc
-chmod +x install.sh
-./install.sh
+sudo ./install.sh --guest
 ```
 
-## Helper package directories
-
-This helper is self-contained under `helpers/ai-dev-lxc/`. Future helper-specific configuration templates, payloads, shell modules, screenshots, and tests should be added to its `templates/`, `files/`, `lib/`, `assets/`, and `tests/` directories rather than to repository-global folders.
-
-Tagged releases include both the standalone installer and complete ZIP/TAR.GZ bundles of this folder.
-
-## Claude Code installation
-
-On Debian, the helper installs Claude Code from Anthropic's signed `stable` APT repository and verifies signing-key fingerprint `31DD DE24 DDFA B679 F42D 7BD2 BAA9 29FF 1A7E CACE`. Detailed installation output is stored in `/var/log/ai-agent-claude-install.log`. On x86-64, the helper checks that the Proxmox host exposes the AVX CPU flag before installation.
-
-
-## Web IDE verification
-
-Provisioning does not report success until code-server passes all checks appropriate to the selected access mode:
-
-1. `code-server@<user>` is active under systemd.
-2. The configured TCP port is listening on the expected address.
-3. `http://127.0.0.1:<port>/healthz` returns a valid code-server health response.
-4. In LAN mode, the Proxmox host can reach `http://<lxc-ip>:<port>/healthz`.
-
-Inside the LXC, run:
+For unattended repair using `/etc/ai-development-gateway.env`:
 
 ```bash
-web-ide-status
+sudo ./install.sh --guest --non-interactive
 ```
 
-From the helper TUI, select **Verify Web IDE service and HTTP access** to repeat the complete check. A LAN failure records service status, journal output, listeners, routing, container configuration, and Proxmox firewall status in the helper log.
+## Default URLs
 
-## Credential and keyring support
+```text
+http://ai-dev.home.arpa
+http://code.ai-dev.home.arpa
+http://files.ai-dev.home.arpa
+http://termix.ai-dev.home.arpa
+```
 
-The helper installs `gnome-keyring`, `libsecret-tools`, `dbus-user-session`, `libpam-gnome-keyring`, `python3-keyring`, `pinentry-curses`, `pass`, and `keyutils`. This does not install a desktop environment.
-
-Useful commands:
+The dashboard defaults to `ai-dev.home.arpa`. Each service prefix is editable. The generated DNS records are available with:
 
 ```bash
-keyring-status
-keyring-session
+gateway-dns-records
 ```
 
-`keyring-session` opens a shell with a private D-Bus session and GNOME Keyring daemon. It is useful for terminal applications that expect the Secret Service API. SSH public-key logins cannot automatically unlock a password-protected login keyring because no login password is supplied; use `keyring-session`, `pass`, or agent forwarding according to the application's credential model.
+> The preferred wildcard record `*.ai-dev.home.arpa` covers the default service names. The dashboard itself still needs the explicit `ai-dev.home.arpa` record.
+
+## Management commands
+
+| Command | Purpose |
+|---|---|
+| `gateway-status --check` | Validate Caddy, backends, proxy routes, and DNS resolution |
+| `sudo gateway-restart` | Format, validate, and restart Caddy |
+| `sudo gateway-config` | Edit `/etc/caddy/Caddyfile` |
+| `gateway-logs` | Show recent Caddy and Homepage logs |
+| `gateway-dns-records` | Print records for the current LXC IP |
+| `homepage-status` | Check container, listener, HTTP endpoint, and image |
+| `sudo homepage-backup` | Create a timestamped `.tar.zst` backup |
+| `sudo homepage-update` | Pull, recreate, verify, and roll back on failure |
+| `codex-status --check` | Check binary, configuration, login type, and permissions |
+| `codex-login` | Start headless ChatGPT device-code login |
+| `codex-logout` | Remove the active Codex credentials |
+| `sudo codex-update` | Re-run the official installer without archiving credentials |
+
+## Codex authentication
+
+The default is ChatGPT account authentication:
+
+```bash
+codex-login
+```
+
+This runs `codex login --device-auth` as the configured development user. No OpenAI API key is required. API-key mode is an explicit advanced option and is separately billed. The helper never stores an API key in its state.
+
+`~/.codex/auth.json` is treated as a password-equivalent secret. It is excluded from helper backups, diagnostics, tests, and release packages. Credential storage defaults to `auto`, allowing an available OS keyring and otherwise using the protected file cache.
+
+## Local DNS examples
+
+### Router local DNS
+
+Create one A/host record per line printed by `gateway-dns-records`, all pointing to the LXC IPv4 address.
+
+### AdGuard Home
+
+Open **Filters → DNS rewrites**, create the dashboard and service records, then flush the client DNS cache.
+
+### Pi-hole
+
+Open **Local DNS → DNS Records** and add each hostname with the LXC IPv4 address.
+
+### Windows hosts file
+
+Edit as Administrator:
+
+```text
+C:\Windows\System32\drivers\etc\hosts
+```
+
+Example:
+
+```text
+192.168.31.233 ai-dev.home.arpa code.ai-dev.home.arpa files.ai-dev.home.arpa termix.ai-dev.home.arpa
+```
+
+Then run:
+
+```powershell
+ipconfig /flushdns
+```
+
+### Linux hosts file
+
+Add the same line to `/etc/hosts`, then restart the local resolver or browser if it caches DNS.
+
+## HTTP and internal HTTPS
+
+- **HTTP mode** is intended for a trusted private LAN and disables Caddy automatic HTTPS explicitly.
+- **Internal HTTPS mode** adds `tls internal` to every generated site. Client devices must trust Caddy's local root certificate.
+
+Caddy is installed natively from the official Debian repository and runs under the packaged `caddy.service` account. Homepage remains inside Docker.
+
+Homepage’s built-in resource widget reports the Homepage container CPU/memory context. The helper mounts `/srv/workspace` read-only so its disk usage is visible; use a separate host metrics provider such as Glances when full LXC host metrics are required.
+
+## Backend restriction and rollback
+
+When enabled, restriction occurs only after all proxy routes pass:
+
+1. Back up code-server, FileBrowser, and Termix configuration.
+2. Change code-server to `127.0.0.1:8080`.
+3. Set FileBrowser Quantum `http.listen` (v2) or `server.listen` (v1) to `127.0.0.1`.
+4. Change the Termix publish rule to `127.0.0.1:8082:8080`.
+5. Restart and recheck every backend and public route.
+6. Probe the code-server and Termix routes with HTTP Upgrade headers.
+7. Restore the original files automatically if any stage fails.
+
+Caddy and Homepage also back up their own configurations before replacement or update.
+
+## Adding another service
+
+1. Add state fields for the enable flag, hostname, and backend port.
+2. Add a conditional tile in `homepage_render_services()`.
+3. Add a conditional `caddy_site_block` in `caddy_render_config()`.
+4. Extend `gateway-status`, DNS record generation, and host verification.
+5. Add HTTP/HTTPS and disabled-service cases to the tests.
+
+## Security
+
+- Homepage is bound to loopback and is not an authentication layer.
+- Docker socket discovery is off by default and requires an explicit warning/selection.
+- Existing authentication remains enabled for code-server, FileBrowser, and Termix.
+- The helper does not configure router port forwarding or public internet exposure.
+- Use a VPN or authenticated edge proxy before remote access.
+- Enable MFA on the ChatGPT account used for Codex.

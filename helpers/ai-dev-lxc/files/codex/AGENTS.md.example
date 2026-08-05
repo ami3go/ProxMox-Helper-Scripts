@@ -1,0 +1,9 @@
+# Repository instructions
+
+- Inspect the existing implementation before replacing code.
+- Preserve backward compatibility and existing user data.
+- Work in small, reviewable phases.
+- Create a Git checkpoint before substantial changes.
+- Run the repository's documented tests after every phase.
+- Do not remove tests merely to make a build pass.
+- Report changed files, test evidence, and remaining risks.

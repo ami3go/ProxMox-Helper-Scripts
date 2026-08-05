@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
-ROOT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../../.." && pwd)
-ENTRY="$ROOT_DIR/helpers/ai-dev-lxc/install.sh"
-MANIFEST="$ROOT_DIR/helpers/ai-dev-lxc/manifest.env"
-[[ -x $ENTRY ]]
-[[ -f $MANIFEST ]]
-bash -n "$ENTRY"
-grep -Fq 'readonly SCRIPT_VERSION="2.2.2"' "$ENTRY"
-printf 'AI Development LXC smoke test passed.\n'
+ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+for file in "$ROOT/install.sh" "$ROOT"/lib/*.sh "$ROOT"/tests/*.sh; do bash -n "$file"; done
+"$ROOT/tests/state-migration-test.sh"
+"$ROOT/tests/codex-cli-test.sh"
+"$ROOT/tests/homepage-config-test.sh"
+"$ROOT/tests/caddy-config-test.sh"
+"$ROOT/tests/binding-change-test.sh"
+"$ROOT/tests/rollback-test.sh"
+for required in \
+  manifest.env install.sh README.md \
+  lib/caddy.sh lib/homepage.sh lib/codex.sh lib/bindings.sh lib/state.sh \
+  templates/Caddyfile.tpl templates/homepage-compose.yaml.tpl templates/codex-config.toml.tpl \
+  files/homepage/services.yaml files/homepage/settings.yaml files/homepage/widgets.yaml files/homepage/bookmarks.yaml files/homepage/docker.yaml; do
+  [[ -e "$ROOT/$required" ]] || { echo "Missing required file: $required" >&2; exit 1; }
+done
+! find "$ROOT" -name auth.json -o -name '*.key' | grep -q .
+echo 'PASS: all smoke tests'

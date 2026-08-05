@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "release": "2.2.7",
+  "helpers": [
+    {
+      "id": "ai-dev-lxc",
+      "name": "AI Development LXC",
+      "version": "2.2.7",
+      "entrypoint": "helpers/ai-dev-lxc/install.sh",
+      "target": "proxmox-host",
+      "features": ["codex-cli", "caddy", "homepage", "rollback", "dns-guidance"]
+    }
+  ]
+}

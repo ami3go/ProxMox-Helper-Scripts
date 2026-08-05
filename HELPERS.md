@@ -1,9 +1,5 @@
-# Helper Catalog
+# Helper catalog
 
-This file is generated from `helpers/*/manifest.env`. Do not edit it manually.
-
-| Helper | Category | Version | Target | Description |
-|---|---|---:|---|---|
-| [AI Development LXC](helpers/ai-dev-lxc/README.md) (`ai-dev-lxc`) | development | 2.2.2 | proxmox-host | Create and maintain a headless Debian LXC with verified code-server LAN access, credential keyrings, Python, Robot Framework, GitHub tooling, and selectable AI coding agents. |
-
-Total helpers: **1**
+| Helper | Version | Entry point | Purpose |
+|---|---:|---|---|
+| AI Development LXC | 2.2.7 | `helpers/ai-dev-lxc/install.sh` | Add Codex CLI, Caddy, Homepage, DNS guidance, and repair-safe backend integration to the AI development container |

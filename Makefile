@@ -1,21 +1,10 @@
-SHELL := /usr/bin/env bash
+.PHONY: test validate package
 
-.PHONY: validate catalog package site clean new-helper
+test:
+	./helpers/ai-dev-lxc/tests/smoke.sh
 
 validate:
 	./scripts/validate.sh
 
-catalog:
-	./scripts/generate-catalog.py
-
-package: catalog validate
+package: validate
 	./scripts/package-release.sh
-
-site: catalog
-	./scripts/build-site.sh
-
-new-helper:
-	./scripts/new-helper.sh
-
-clean:
-	rm -rf dist _site scripts/__pycache__
