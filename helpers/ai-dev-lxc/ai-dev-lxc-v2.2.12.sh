@@ -11,7 +11,7 @@ set -Eeuo pipefail
 shopt -s inherit_errexit 2>/dev/null || true
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_VERSION="2.2.11"
+readonly SCRIPT_VERSION="2.2.12"
 readonly BACKTITLE="AI Development LXC • Proxmox VE"
 readonly STATE_DIR="/etc/claude-dev-lxc"
 readonly LOG_DIR="/var/log/claude-dev-lxc"
@@ -1619,16 +1619,50 @@ docker_diagnostics() {
   journalctl -u docker.service -u containerd.service -n 180 --no-pager -l >&2 || true
 }
 
+docker_socket_path() {
+  if [[ -S /run/docker.sock ]]; then
+    printf '%s' /run/docker.sock
+  elif [[ -S /var/run/docker.sock ]]; then
+    printf '%s' /var/run/docker.sock
+  else
+    return 1
+  fi
+}
+
+docker_api_ping() {
+  local socket response
+  socket=$(docker_socket_path) || return 1
+  response=$(timeout --foreground 5s curl -fsS \
+    --unix-socket "$socket" http://localhost/_ping 2>/dev/null) || return 1
+  [[ "$response" == "OK" ]]
+}
+
+docker_cli_ready() {
+  timeout --foreground 10s docker version \
+    --format '{{.Server.Version}}' >/dev/null 2>&1
+}
+
 wait_for_docker() {
-  local attempt state
-  for attempt in $(seq 1 60); do
-    if timeout --foreground 6s docker info >/dev/null 2>&1; then
-      return 0
+  local attempt state api_seen=0
+  for attempt in $(seq 1 45); do
+    if docker_api_ping; then
+      api_seen=1
+      if docker_cli_ready; then
+        return 0
+      fi
     fi
+
     state=$(systemctl is-failed docker.service 2>/dev/null || true)
     [[ "$state" == failed ]] && return 1
     sleep 2
   done
+
+  if ((api_seen)); then
+    echo "ERROR: Docker API answered /_ping, but the Docker CLI could not negotiate with the daemon." >&2
+    timeout --foreground 15s docker version >&2 || true
+  else
+    echo "ERROR: Docker did not expose a responsive Unix-socket API." >&2
+  fi
   return 1
 }
 
@@ -1664,24 +1698,38 @@ EOF
   fi
 }
 
+wait_for_unit_active() {
+  local unit=$1 timeout_seconds=$2 elapsed=0 state
+  while ((elapsed < timeout_seconds)); do
+    state=$(systemctl is-active "$unit" 2>/dev/null || true)
+    [[ "$state" == active ]] && return 0
+    [[ "$state" == failed ]] && return 1
+    sleep 2
+    ((elapsed += 2))
+  done
+  return 1
+}
+
 start_docker_once() {
   systemctl daemon-reload
   systemctl reset-failed containerd.service docker.service docker.socket 2>/dev/null || true
 
-  if ! timeout --foreground 90s systemctl start containerd.service; then
-    echo "ERROR: containerd did not start within 90 seconds." >&2
+  systemctl start --no-block containerd.service
+  if ! wait_for_unit_active containerd.service 90; then
+    echo "ERROR: containerd did not become active within 90 seconds." >&2
     docker_diagnostics
     return 1
   fi
 
-  if ! timeout --foreground 120s systemctl start docker.service; then
-    echo "ERROR: Docker did not start within 120 seconds." >&2
+  systemctl start --no-block docker.service
+  if ! wait_for_unit_active docker.service 120; then
+    echo "ERROR: Docker service did not become active within 120 seconds." >&2
     docker_diagnostics
     return 1
   fi
 
   if ! wait_for_docker; then
-    echo "ERROR: Docker service started but the daemon did not become ready." >&2
+    echo "ERROR: Docker service is active, but its API/CLI readiness check failed." >&2
     docker_diagnostics
     return 1
   fi
@@ -1692,30 +1740,56 @@ install_termix() {
     docker.io docker-compose
   systemctl enable docker.service containerd.service >/dev/null
 
-  # Debian may have already started Docker from the package post-install script.
-  # Do not restart a healthy daemon immediately; that race was the cause of
-  # repeated stop/start failures during LXC provisioning.
+  # Debian may start Docker from the package post-install script. Readiness is
+  # checked through the daemon's /_ping API plus `docker version`; `docker info`
+  # is intentionally not used because it may block in nested LXC environments.
   if wait_for_docker; then
-    echo "Docker is already active and responsive; preserving its current storage driver."
+    echo "Docker is already active and responsive; preserving its current configuration."
   else
-    echo "Docker is not ready after package installation; attempting one clean start."
-    timeout --foreground 60s systemctl stop docker.service docker.socket 2>/dev/null || true
-    start_docker_once || true
-  fi
-
-  if ! wait_for_docker; then
-    echo "Docker still is not usable; applying the vfs storage driver for nested LXC compatibility."
-    timeout --foreground 60s systemctl stop docker.service docker.socket 2>/dev/null || true
-    configure_nested_docker_storage
-    if ! start_docker_once; then
-      echo "ERROR: Docker is unavailable inside the LXC. Confirm Proxmox features nesting=1,keyctl=1." >&2
+    current_state=$(systemctl is-active docker.service 2>/dev/null || true)
+    if [[ "$current_state" == active ]]; then
+      echo "ERROR: Docker service is active but its Unix-socket API is not usable." >&2
+      echo "The installer will not stop or reconfigure a running daemon automatically." >&2
       docker_diagnostics
       return 1
     fi
+
+    echo "Docker is not active after package installation; attempting one non-blocking start."
+    if ! start_docker_once; then
+      journal_text=$(journalctl -u docker.service -u containerd.service -n 160 --no-pager -l 2>/dev/null || true)
+      if grep -Eqi 'overlay|overlay2|operation not permitted|failed to mount|invalid argument' <<<"$journal_text"; then
+        echo "Docker startup indicates a nested-LXC storage-driver problem; applying vfs once." >&2
+        timeout --foreground 60s systemctl stop docker.service docker.socket 2>/dev/null || true
+        configure_nested_docker_storage
+        start_docker_once || {
+          echo "ERROR: Docker remains unavailable after the vfs fallback. Confirm nesting=1,keyctl=1." >&2
+          docker_diagnostics
+          return 1
+        }
+      else
+        echo "ERROR: Docker could not be started. No storage-driver rewrite was attempted." >&2
+        return 1
+      fi
+    fi
   fi
 
-  printf 'Docker is ready. Storage driver: %s\n' \
-    "$(timeout --foreground 8s docker info --format '{{.Driver}}' 2>/dev/null || echo unknown)"
+  printf 'Docker is ready. Server version: %s\n' \
+    "$(timeout --foreground 8s docker version --format '{{.Server.Version}}' 2>/dev/null || echo unknown)"
+  docker_socket=$(docker_socket_path || true)
+  if [[ -n "$docker_socket" ]]; then
+    docker_driver=$(timeout --foreground 8s curl -fsS --unix-socket "$docker_socket" \
+      http://localhost/info 2>/dev/null | jq -r '.Driver // "unknown"' 2>/dev/null || echo unavailable)
+  else
+    docker_driver=unavailable
+  fi
+  printf 'Docker storage driver: %s\n' "$docker_driver"
+
+  if ! timeout --foreground 15s docker compose version >/dev/null 2>&1; then
+    echo "ERROR: Docker Compose v2 is not available after installing docker-compose." >&2
+    docker compose version >&2 || true
+    command -v docker-compose >&2 || true
+    return 1
+  fi
 
   usermod -aG docker "$DEV_USER"
   install -d -m 0755 /opt/termix /var/backups/termix
