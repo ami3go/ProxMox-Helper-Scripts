@@ -11,7 +11,7 @@ set -Eeuo pipefail
 shopt -s inherit_errexit 2>/dev/null || true
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_VERSION="2.2.10"
+readonly SCRIPT_VERSION="2.2.11"
 readonly BACKTITLE="AI Development LXC • Proxmox VE"
 readonly STATE_DIR="/etc/claude-dev-lxc"
 readonly LOG_DIR="/var/log/claude-dev-lxc"
@@ -1600,12 +1600,48 @@ chmod 0755 /usr/local/bin/keyring-status
 
 stage 58 "Installing and verifying Termix and its container runtime"
 # Termix: web-based SSH terminal and server-management panel.
-configure_nested_docker_storage() {
-  local tmp_json
-  install -d -m 0755 /etc/docker
-  if [[ -s /etc/docker/daemon.json ]]; then
-    if jq -e '."storage-driver"' /etc/docker/daemon.json >/dev/null 2>&1; then
+docker_diagnostics() {
+  echo "=== Docker service state ===" >&2
+  systemctl show docker.service \
+    -p LoadState -p ActiveState -p SubState -p Result \
+    -p ExecMainCode -p ExecMainStatus --no-pager >&2 || true
+  systemctl status docker.service --no-pager -l >&2 || true
+  echo "=== Docker daemon configuration ===" >&2
+  if [[ -f /etc/docker/daemon.json ]]; then
+    cat /etc/docker/daemon.json >&2 || true
+    jq empty /etc/docker/daemon.json >&2 || true
+    timeout --foreground 15s dockerd --validate \
+      --config-file=/etc/docker/daemon.json >&2 || true
+  else
+    echo "/etc/docker/daemon.json does not exist." >&2
+  fi
+  echo "=== Docker journal ===" >&2
+  journalctl -u docker.service -u containerd.service -n 180 --no-pager -l >&2 || true
+}
+
+wait_for_docker() {
+  local attempt state
+  for attempt in $(seq 1 60); do
+    if timeout --foreground 6s docker info >/dev/null 2>&1; then
       return 0
+    fi
+    state=$(systemctl is-failed docker.service 2>/dev/null || true)
+    [[ "$state" == failed ]] && return 1
+    sleep 2
+  done
+  return 1
+}
+
+configure_nested_docker_storage() {
+  local tmp_json backup=""
+  install -d -m 0755 /etc/docker
+
+  if [[ -s /etc/docker/daemon.json ]]; then
+    backup="/etc/docker/daemon.json.pre-lxc-vfs.$(date +%Y%m%d-%H%M%S)"
+    cp -a /etc/docker/daemon.json "$backup"
+    if ! jq empty /etc/docker/daemon.json >/dev/null 2>&1; then
+      echo "ERROR: Existing /etc/docker/daemon.json is not valid JSON; preserved as $backup." >&2
+      return 1
     fi
     tmp_json=$(mktemp)
     jq '. + {"storage-driver":"vfs"}' /etc/docker/daemon.json >"$tmp_json"
@@ -1618,25 +1654,68 @@ configure_nested_docker_storage() {
 }
 EOF
   fi
+
+  jq empty /etc/docker/daemon.json
+  if ! timeout --foreground 15s dockerd --validate \
+      --config-file=/etc/docker/daemon.json; then
+    echo "ERROR: Docker rejected /etc/docker/daemon.json." >&2
+    [[ -n "$backup" ]] && cp -a "$backup" /etc/docker/daemon.json
+    return 1
+  fi
+}
+
+start_docker_once() {
+  systemctl daemon-reload
+  systemctl reset-failed containerd.service docker.service docker.socket 2>/dev/null || true
+
+  if ! timeout --foreground 90s systemctl start containerd.service; then
+    echo "ERROR: containerd did not start within 90 seconds." >&2
+    docker_diagnostics
+    return 1
+  fi
+
+  if ! timeout --foreground 120s systemctl start docker.service; then
+    echo "ERROR: Docker did not start within 120 seconds." >&2
+    docker_diagnostics
+    return 1
+  fi
+
+  if ! wait_for_docker; then
+    echo "ERROR: Docker service started but the daemon did not become ready." >&2
+    docker_diagnostics
+    return 1
+  fi
 }
 
 install_termix() {
-  timeout --foreground 30m apt-get install -y --no-install-recommends docker.io docker-compose
-  systemctl enable docker.service containerd.service
-  systemctl restart containerd.service || true
-  systemctl restart docker.service || true
+  timeout --foreground 30m apt-get install -y --no-install-recommends \
+    docker.io docker-compose
+  systemctl enable docker.service containerd.service >/dev/null
 
-  if ! docker info >/dev/null 2>&1; then
-    echo "Docker did not start with its default storage driver; switching to vfs for nested LXC compatibility."
+  # Debian may have already started Docker from the package post-install script.
+  # Do not restart a healthy daemon immediately; that race was the cause of
+  # repeated stop/start failures during LXC provisioning.
+  if wait_for_docker; then
+    echo "Docker is already active and responsive; preserving its current storage driver."
+  else
+    echo "Docker is not ready after package installation; attempting one clean start."
+    timeout --foreground 60s systemctl stop docker.service docker.socket 2>/dev/null || true
+    start_docker_once || true
+  fi
+
+  if ! wait_for_docker; then
+    echo "Docker still is not usable; applying the vfs storage driver for nested LXC compatibility."
+    timeout --foreground 60s systemctl stop docker.service docker.socket 2>/dev/null || true
     configure_nested_docker_storage
-    systemctl restart docker.service
+    if ! start_docker_once; then
+      echo "ERROR: Docker is unavailable inside the LXC. Confirm Proxmox features nesting=1,keyctl=1." >&2
+      docker_diagnostics
+      return 1
+    fi
   fi
-  if ! docker info >/dev/null 2>&1; then
-    echo "ERROR: Docker is unavailable inside the LXC. Confirm Proxmox features nesting=1,keyctl=1." >&2
-    systemctl status docker.service --no-pager >&2 || true
-    journalctl -u docker.service -n 120 --no-pager >&2 || true
-    return 1
-  fi
+
+  printf 'Docker is ready. Storage driver: %s\n' \
+    "$(timeout --foreground 8s docker info --format '{{.Driver}}' 2>/dev/null || echo unknown)"
 
   usermod -aG docker "$DEV_USER"
   install -d -m 0755 /opt/termix /var/backups/termix
