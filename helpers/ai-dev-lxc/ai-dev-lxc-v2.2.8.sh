@@ -11,7 +11,7 @@ set -Eeuo pipefail
 shopt -s inherit_errexit 2>/dev/null || true
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_VERSION="2.2.7"
+readonly SCRIPT_VERSION="2.2.8"
 readonly BACKTITLE="AI Development LXC • Proxmox VE"
 readonly STATE_DIR="/etc/claude-dev-lxc"
 readonly LOG_DIR="/var/log/claude-dev-lxc"
@@ -1079,7 +1079,9 @@ chmod 0644 /etc/ai-development-web.env
 
 # FileBrowser Quantum: authenticated browser file manager for /srv/workspace.
 install_filebrowser_quantum() {
-  local arch asset_url tmp_binary current_major new_major version_text
+  local arch asset_name asset_url api_url release_json tag_name tmp_binary
+  local current_major new_major version_text config_file
+
   case "$(dpkg --print-architecture)" in
     amd64) arch="amd64" ;;
     arm64) arch="arm64" ;;
@@ -1095,18 +1097,51 @@ install_filebrowser_quantum() {
       ;;
   esac
 
-  asset_url="https://github.com/gtsteffaniak/filebrowser/releases/latest/download/linux-${arch}-filebrowser"
+  asset_name="linux-${arch}-filebrowser"
+  api_url="https://api.github.com/repos/gtsteffaniak/filebrowser/releases/latest"
+  release_json=$(mktemp)
   tmp_binary=$(mktemp)
-  curl -fL --retry 3 --retry-all-errors --connect-timeout 20     "$asset_url" -o "$tmp_binary"
+
+  # Resolve the latest stable release through the GitHub API. This gives us a
+  # reliable release tag for selecting the matching v1/v2 configuration schema.
+  if curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 \
+      -H 'Accept: application/vnd.github+json' \
+      "$api_url" -o "$release_json"; then
+    tag_name=$(jq -r '.tag_name // empty' "$release_json")
+    asset_url=$(jq -r --arg name "$asset_name" \
+      '.assets[]? | select(.name == $name) | .browser_download_url' \
+      "$release_json" | head -n1)
+  else
+    tag_name=""
+    asset_url=""
+  fi
+  rm -f "$release_json"
+
+  # Fallback keeps installation working when the API is unavailable or rate-limited.
+  if [[ -z "$asset_url" || "$asset_url" == "null" ]]; then
+    asset_url="https://github.com/gtsteffaniak/filebrowser/releases/latest/download/${asset_name}"
+  fi
+
+  curl -fL --retry 3 --retry-all-errors --connect-timeout 20 \
+    "$asset_url" -o "$tmp_binary"
   chmod 0755 "$tmp_binary"
 
   version_text=$($tmp_binary version 2>&1 || $tmp_binary --version 2>&1 || true)
-  new_major=$(grep -Eo 'v?[0-9]+\.' <<<"$version_text" | head -n1 | tr -d 'v.' || true)
+  new_major=$(sed -nE 's/.*[^0-9]([0-9]+)\.[0-9]+\.[0-9]+.*/\1/p' <<<"${tag_name:-$version_text}" | head -n1)
+  if [[ -z "$new_major" ]]; then
+    new_major=$(grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' <<<"$version_text" | head -n1 | cut -d. -f1 || true)
+  fi
+  [[ "$new_major" =~ ^[0-9]+$ ]] || new_major=1
+
   if [[ -x /usr/local/bin/filebrowser ]]; then
-    current_major=$(/usr/local/bin/filebrowser version 2>&1 | grep -Eo 'v?[0-9]+\.' | head -n1 | tr -d 'v.' || true)
-    if [[ -n "$current_major" && -n "$new_major" && "$current_major" != "$new_major" ]] &&        { [[ -e "$DEV_HOME/.local/share/filebrowser/database.db" ]] ||          [[ -e "$DEV_HOME/.local/share/filebrowser/filebrowser.sqlite" ]]; }; then
-      echo "WARNING: FileBrowser Quantum major upgrade $current_major -> $new_major requires a database/config migration. Retaining the installed binary." >&2
+    version_text=$(/usr/local/bin/filebrowser version 2>&1 || /usr/local/bin/filebrowser --version 2>&1 || true)
+    current_major=$(grep -Eo '[0-9]+\.[0-9]+\.[0-9]+' <<<"$version_text" | head -n1 | cut -d. -f1 || true)
+    if [[ -n "$current_major" && "$current_major" != "$new_major" ]] && \
+       { [[ -e "$DEV_HOME/.local/share/filebrowser/database.db" ]] || \
+         [[ -e "$DEV_HOME/.local/share/filebrowser/filebrowser.sqlite" ]]; }; then
+      echo "WARNING: FileBrowser Quantum major upgrade $current_major -> $new_major requires an explicit database/config migration. Retaining the installed binary." >&2
       rm -f "$tmp_binary"
+      new_major="$current_major"
     else
       install -m 0755 "$tmp_binary" /usr/local/bin/filebrowser
       rm -f "$tmp_binary"
@@ -1116,16 +1151,18 @@ install_filebrowser_quantum() {
     rm -f "$tmp_binary"
   fi
 
-  install -d -m 0700 -o "$DEV_USER" -g "$DEV_USER"     "$DEV_HOME/.config/filebrowser"     "$DEV_HOME/.local/share/filebrowser"     "$DEV_HOME/.cache/filebrowser"
+  install -d -m 0700 -o "$DEV_USER" -g "$DEV_USER" \
+    "$DEV_HOME/.config/filebrowser" \
+    "$DEV_HOME/.local/share/filebrowser" \
+    "$DEV_HOME/.cache/filebrowser"
 
-  version_text=$(/usr/local/bin/filebrowser version 2>&1 || /usr/local/bin/filebrowser --version 2>&1 || true)
-  current_major=$(grep -Eo 'v?[0-9]+\.' <<<"$version_text" | head -n1 | tr -d 'v.' || true)
-
-  if [[ "$current_major" =~ ^[2-9][0-9]*$ ]]; then
-    cat >"$DEV_HOME/.config/filebrowser/config.yaml" <<EOF
+  config_file="$DEV_HOME/.config/filebrowser/config.yaml"
+  if [[ "$new_major" -ge 2 ]]; then
+    cat >"$config_file" <<EOF
 http:
   port: $FILE_MANAGER_PORT
   listen: "0.0.0.0"
+  baseURL: "/"
   disableRateLimit: false
 server:
   database:
@@ -1149,7 +1186,7 @@ auth:
       signup: false
 EOF
   else
-    cat >"$DEV_HOME/.config/filebrowser/config.yaml" <<EOF
+    cat >"$config_file" <<EOF
 server:
   port: $FILE_MANAGER_PORT
   address: "0.0.0.0"
@@ -1163,15 +1200,20 @@ server:
         defaultEnabled: true
 auth:
   adminUsername: admin
-  method: password
-  signup: false
+  methods:
+    password:
+      enabled: true
+      minLength: 12
+      signup: false
 EOF
   fi
-  chown "$DEV_USER:$DEV_USER" "$DEV_HOME/.config/filebrowser/config.yaml"
-  chmod 0600 "$DEV_HOME/.config/filebrowser/config.yaml"
+  chown "$DEV_USER:$DEV_USER" "$config_file"
+  chmod 0600 "$config_file"
 
   cat >/etc/filebrowser-quantum.env <<EOF
 FILEBROWSER_ADMIN_PASSWORD=$FILE_MANAGER_PASSWORD
+FILEBROWSER_CONFIG=$config_file
+HOME=$DEV_HOME
 EOF
   chmod 0600 /etc/filebrowser-quantum.env
 
@@ -1187,13 +1229,14 @@ User=$DEV_USER
 Group=$DEV_USER
 WorkingDirectory=$DEV_HOME/.local/share/filebrowser
 EnvironmentFile=/etc/filebrowser-quantum.env
-ExecStart=/usr/local/bin/filebrowser -c $DEV_HOME/.config/filebrowser/config.yaml
+ExecStart=/usr/local/bin/filebrowser -c $config_file
 Restart=on-failure
 RestartSec=3
+TimeoutStartSec=180
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ProtectHome=read-only
+ProtectHome=false
 ReadWritePaths=/srv/workspace $DEV_HOME/.local/share/filebrowser $DEV_HOME/.cache/filebrowser
 
 [Install]
@@ -1205,42 +1248,78 @@ FILE_MANAGER_ENABLED=1
 FILE_MANAGER_PORT=$FILE_MANAGER_PORT
 FILE_MANAGER_USER=$DEV_USER
 FILE_MANAGER_ROOT=/srv/workspace
+FILE_MANAGER_MAJOR=$new_major
 EOF
   chmod 0644 /etc/ai-development-file-manager.env
 
   systemctl daemon-reload
+  systemctl reset-failed filebrowser-quantum.service >/dev/null 2>&1 || true
   systemctl enable --now filebrowser-quantum.service
+}
+
+filebrowser_diagnostics() {
+  echo "=== FileBrowser Quantum diagnostics ===" >&2
+  /usr/local/bin/filebrowser version >&2 2>&1 || /usr/local/bin/filebrowser --version >&2 2>&1 || true
+  echo "--- generated config ---" >&2
+  sed -E 's/(adminPassword:).*/\1 REDACTED/' "$DEV_HOME/.config/filebrowser/config.yaml" >&2 2>/dev/null || true
+  echo "--- service definition ---" >&2
+  systemctl cat filebrowser-quantum.service >&2 2>/dev/null || true
+  echo "--- listeners ---" >&2
+  ss -H -lntp >&2 2>/dev/null || true
+  echo "--- service status ---" >&2
+  systemctl status filebrowser-quantum.service --no-pager >&2 2>/dev/null || true
+  echo "--- journal ---" >&2
+  journalctl -u filebrowser-quantum.service -n 160 --no-pager >&2 2>/dev/null || true
 }
 
 verify_filebrowser_local() {
   local service="filebrowser-quantum.service"
   local health_url="http://127.0.0.1:$FILE_MANAGER_PORT/health"
-  local listener health attempt
-  for attempt in $(seq 1 30); do
+  local root_url="http://127.0.0.1:$FILE_MANAGER_PORT/"
+  local listener="" health="" root_code="000" attempt
+
+  # Initial indexing and first-database creation may take longer on slower hosts.
+  for attempt in $(seq 1 120); do
+    listener=$(ss -H -lntp 2>/dev/null | awk -v port=":$FILE_MANAGER_PORT" '$4 ~ port "$" {print}')
     health=$(curl -fsS --max-time 4 "$health_url" 2>/dev/null || true)
-    if systemctl is-active --quiet "$service" && [[ -n "$health" ]]; then
+    root_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 "$root_url" 2>/dev/null || printf '000')
+    if systemctl is-active --quiet "$service" && [[ -n "$listener" ]] && \
+       { [[ -n "$health" ]] || [[ "$root_code" =~ ^(200|301|302|303|307|308|401|403)$ ]]; }; then
       break
     fi
     sleep 1
   done
-  listener=$(ss -H -lntp 2>/dev/null | awk -v port=":$FILE_MANAGER_PORT" '$4 ~ port "$" {print}')
+
   if ! systemctl is-active --quiet "$service"; then
     echo "ERROR: FileBrowser Quantum service is not active." >&2
-    systemctl status "$service" --no-pager >&2 || true
-    journalctl -u "$service" -n 100 --no-pager >&2 || true
+    filebrowser_diagnostics
     return 1
   fi
-  if [[ -z "$health" ]]; then
-    echo "ERROR: FileBrowser Quantum /health did not respond at $health_url." >&2
-    curl -v --max-time 5 "$health_url" >&2 || true
+
+  if [[ -z "$listener" ]]; then
+    echo "ERROR: FileBrowser Quantum is active but is not listening on configured port $FILE_MANAGER_PORT." >&2
+    filebrowser_diagnostics
     return 1
   fi
-  if ! grep -Eq "(^|[[:space:]])(0\.0\.0\.0|\*|\[::\]):$FILE_MANAGER_PORT([[:space:]]|$)" <<<"$listener"; then
+
+  if ! grep -Eq "(^|[[:space:]])(0\\.0\\.0\\.0|\\*|\\[::\\]):$FILE_MANAGER_PORT([[:space:]]|$)" <<<"$listener"; then
     echo "ERROR: FileBrowser Quantum is not listening on all interfaces at port $FILE_MANAGER_PORT." >&2
     printf '%s\n' "$listener" >&2
+    filebrowser_diagnostics
     return 1
   fi
-  printf 'FileBrowser Quantum health check passed: %s\n' "$health"
+
+  if [[ -z "$health" && ! "$root_code" =~ ^(200|301|302|303|307|308|401|403)$ ]]; then
+    echo "ERROR: FileBrowser Quantum did not respond on either $health_url or $root_url." >&2
+    filebrowser_diagnostics
+    return 1
+  fi
+
+  if [[ -n "$health" ]]; then
+    printf 'FileBrowser Quantum health check passed: %s\n' "$health"
+  else
+    printf 'FileBrowser Quantum HTTP check passed at %s with status %s; /health was unavailable.\n' "$root_url" "$root_code"
+  fi
   printf 'Verified listener: %s\n' "$listener"
 }
 
@@ -1993,14 +2072,19 @@ fi
 
 service=filebrowser-quantum.service
 health_url="http://127.0.0.1:$FILE_MANAGER_PORT/health"
+root_url="http://127.0.0.1:$FILE_MANAGER_PORT/"
 service_state=$(systemctl is-active "$service" 2>/dev/null || true)
 listener=$(ss -H -lntp 2>/dev/null | awk -v port=":$FILE_MANAGER_PORT" '$4 ~ port "$" {print}')
 health=$(curl -fsS --max-time 4 "$health_url" 2>/dev/null || true)
+root_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 "$root_url" 2>/dev/null || printf '000')
 version=$(filebrowser version 2>&1 | head -n1 || filebrowser --version 2>&1 | head -n1 || true)
 
 [[ "$service_state" == active ]] || failed=1
-[[ -n "$health" ]] || failed=1
-grep -Eq "(^|[[:space:]])(0\.0\.0\.0|\*|\[::\]):$FILE_MANAGER_PORT([[:space:]]|$)" <<<"$listener" || failed=1
+[[ -n "$listener" ]] || failed=1
+if [[ -z "$health" && ! "$root_code" =~ ^(200|301|302|303|307|308|401|403)$ ]]; then
+  failed=1
+fi
+grep -Eq "(^|[[:space:]])(0\\.0\\.0\\.0|\\*|\\[::\\]):$FILE_MANAGER_PORT([[:space:]]|$)" <<<"$listener" || failed=1
 
 if ((check_only == 0)); then
   printf 'Version:          %s\n' "${version:-unknown}"
@@ -2008,14 +2092,15 @@ if ((check_only == 0)); then
   printf 'Workspace root:   %s\n' "$FILE_MANAGER_ROOT"
   printf 'Port:             %s\n' "$FILE_MANAGER_PORT"
   printf 'Listener:         %s\n' "${listener:-not found}"
-  printf 'Local health:     %s\n' "${health:-FAILED}"
+  printf 'Local /health:    %s\n' "${health:-unavailable}"
+  printf 'Local root HTTP:  %s\n' "${root_code:-000}"
   while IFS= read -r address; do
     [[ -n $address ]] && printf 'LAN URL:          http://%s:%s\n' "$address" "$FILE_MANAGER_PORT"
   done < <(hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+(\.[0-9]+){3}$' || true)
   if ((failed)); then
     printf 'Result:           FAILED\n'
     systemctl status "$service" --no-pager 2>/dev/null || true
-    journalctl -u "$service" -n 40 --no-pager 2>/dev/null || true
+    journalctl -u "$service" -n 100 --no-pager 2>/dev/null || true
   else
     printf 'Result:           PASS\n'
   fi
@@ -2522,11 +2607,13 @@ verify_file_manager_access() {
     return 1
   fi
   health_url="http://$ip:$FILE_MANAGER_PORT/health"
+  local root_url="http://$ip:$FILE_MANAGER_PORT/" code="000"
   log "Verifying FileBrowser Quantum from the Proxmox host: $health_url"
-  for attempt in $(seq 1 20); do
+  for attempt in $(seq 1 40); do
     response=$(curl -fsS --max-time 4 "$health_url" 2>>"$LOG_FILE" || true)
-    if [[ -n "$response" ]]; then
-      log "FileBrowser Quantum LAN verification passed: $response"
+    code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 4 "$root_url" 2>>"$LOG_FILE" || printf '000')
+    if [[ -n "$response" || "$code" =~ ^(200|301|302|303|307|308|401|403)$ ]]; then
+      log "FileBrowser Quantum LAN verification passed: health=${response:-unavailable}, root_http=$code"
       return 0
     fi
     sleep 1
@@ -2542,8 +2629,10 @@ verify_file_manager_access() {
   show_error_details "FileBrowser Quantum is running inside LXC $CTID, but it is not reachable from the Proxmox host at:
 
 $health_url
+or:
+http://$ip:$FILE_MANAGER_PORT/
 
-Check the bridge, VLAN, LXC address, and Proxmox firewall policy for TCP port $FILE_MANAGER_PORT."
+Check the FileBrowser service journal, configured listener, bridge, VLAN, LXC address, and Proxmox firewall policy for TCP port $FILE_MANAGER_PORT."
   return 1
 }
 
