@@ -11,7 +11,7 @@ set -Eeuo pipefail
 shopt -s inherit_errexit 2>/dev/null || true
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_VERSION="2.2.8"
+readonly SCRIPT_VERSION="2.2.10"
 readonly BACKTITLE="AI Development LXC • Proxmox VE"
 readonly STATE_DIR="/etc/claude-dev-lxc"
 readonly LOG_DIR="/var/log/claude-dev-lxc"
@@ -136,6 +136,110 @@ msg_info() {
   whiptail --backtitle "$BACKTITLE" --title "PLEASE WAIT" --infobox "$message" 8 72
   sleep 0.15
   log "INFO: $message"
+}
+
+format_elapsed() {
+  local total=${1:-0}
+  local hours minutes seconds
+  ((total < 0)) && total=0
+  hours=$((total / 3600))
+  minutes=$(((total % 3600) / 60))
+  seconds=$((total % 60))
+  printf '%02d:%02d:%02d' "$hours" "$minutes" "$seconds"
+}
+
+read_provision_status() {
+  pct exec "$CTID" -- bash -lc \
+    'cat /run/ai-dev-provision.status 2>/dev/null || true' \
+    2>/dev/null | tail -n 1
+}
+
+read_provision_log_mtime() {
+  pct exec "$CTID" -- bash -lc \
+    'stat -c %Y /var/log/claude-dev-provision.log 2>/dev/null || printf 0' \
+    2>/dev/null | tr -dc '0-9'
+}
+
+read_provision_last_line() {
+  pct exec "$CTID" -- bash -lc \
+    'tail -n 1 /var/log/claude-dev-provision.log 2>/dev/null || true' \
+    2>/dev/null |
+    tr '\r\n' '  ' |
+    sed 's/[^[:print:]\t]//g' |
+    cut -c1-110
+}
+
+run_provision_with_progress() {
+  local provision_pid rc gauge_rc=0
+  local started now elapsed status progress stage_epoch description
+  local log_mtime idle_seconds last_line idle_note
+
+  pct exec "$CTID" -- rm -f /run/ai-dev-provision.status >/dev/null 2>&1 || true
+
+  # Run provisioning asynchronously so the TUI can remain responsive and show
+  # the current stage instead of leaving a static or blank screen.
+  timeout --foreground --signal=TERM --kill-after=30s 90m \
+    pct exec "$CTID" -- /root/claude-dev-provision.sh >>"$LOG_FILE" 2>&1 &
+  provision_pid=$!
+  started=$(date +%s)
+
+  set +e
+  {
+    while kill -0 "$provision_pid" 2>/dev/null; do
+      now=$(date +%s)
+      elapsed=$((now - started))
+      status=$(read_provision_status || true)
+      progress=1
+      stage_epoch=0
+      description="Waiting for the LXC provisioner to publish its first stage…"
+
+      if [[ "$status" == *"|"* ]]; then
+        IFS='|' read -r progress stage_epoch description <<<"$status"
+      fi
+      [[ "$progress" =~ ^[0-9]+$ ]] || progress=1
+      ((progress < 1)) && progress=1
+      ((progress > 99)) && progress=99
+      [[ "$stage_epoch" =~ ^[0-9]+$ ]] || stage_epoch=0
+
+      log_mtime=$(read_provision_log_mtime || true)
+      [[ "$log_mtime" =~ ^[0-9]+$ ]] || log_mtime=0
+      idle_seconds=0
+      if ((log_mtime > 0 && now >= log_mtime)); then
+        idle_seconds=$((now - log_mtime))
+      fi
+
+      idle_note=""
+      if ((idle_seconds >= 180)); then
+        idle_note="WARNING: no new log output for $(format_elapsed "$idle_seconds"). The current network or package command may be stalled."
+      fi
+
+      last_line=$(read_provision_last_line || true)
+      [[ -n "$last_line" ]] || last_line="No detailed log line is available yet."
+
+      printf 'XXX\n%s\n' "$progress"
+      printf '%s\n\nElapsed: %s\n%s\nLast activity: %s\n\nDetailed host log: %s\nInside LXC: /var/log/claude-dev-provision.log\n' \
+        "$description" "$(format_elapsed "$elapsed")" "$idle_note" "$last_line" "$LOG_FILE"
+      printf 'XXX\n'
+      sleep 2
+    done
+
+    printf 'XXX\n100\nProvisioning process finished. Collecting results and running host-side HTTP checks…\nXXX\n'
+  } | whiptail --backtitle "$BACKTITLE" --title "PROVISIONING LXC $CTID" \
+      --gauge "Starting…" 16 96 1
+  gauge_rc=$?
+
+  wait "$provision_pid"
+  rc=$?
+  set -e
+
+  if ((gauge_rc != 0)); then
+    log "Provisioning progress display exited with status $gauge_rc; provisioning result was $rc."
+  fi
+  if ((rc == 124)); then
+    log "Provisioning exceeded the 90-minute watchdog limit."
+    return 124
+  fi
+  return "$rc"
 }
 
 msg_ok() {
@@ -431,7 +535,7 @@ find_debian_template() {
   local arch
   arch=$(dpkg --print-architecture 2>/dev/null || echo amd64)
   msg_info "Refreshing the Proxmox appliance-template index…"
-  pveam update >>"$LOG_FILE" 2>&1
+  timeout --foreground 10m pveam update >>"$LOG_FILE" 2>&1
 
   TEMPLATE_FILE=$(pveam available --section system 2>/dev/null \
     | awk -v arch="$arch" '$2 ~ /^debian-(13|12)-standard_/ && $2 ~ arch {print $2}' \
@@ -460,7 +564,7 @@ ensure_template_downloaded() {
   fi
 
   msg_info "Downloading $TEMPLATE_FILE to $TEMPLATE_STORAGE…"
-  pveam download "$TEMPLATE_STORAGE" "$TEMPLATE_FILE" >>"$LOG_FILE" 2>&1
+  timeout --foreground 30m pveam download "$TEMPLATE_STORAGE" "$TEMPLATE_FILE" >>"$LOG_FILE" 2>&1
 }
 
 # ---------- Configuration wizard ----------
@@ -869,8 +973,19 @@ ENV
 set -Eeuo pipefail
 
 LOG_FILE=/var/log/claude-dev-provision.log
+STATUS_FILE=/run/ai-dev-provision.status
 exec >>"$LOG_FILE" 2>&1
+
+stage() {
+  local percent=$1
+  shift
+  local description=$*
+  printf '%s|%s|%s\n' "$percent" "$(date +%s)" "$description" >"$STATUS_FILE"
+  printf '[%s] STAGE %s%%: %s\n' "$(date '+%F %T')" "$percent" "$description"
+}
+
 printf '\n[%s] Provisioning started\n' "$(date '+%F %T')"
+stage 1 "Starting provisioner and reading configuration"
 
 source /root/claude-dev.env
 
@@ -932,22 +1047,36 @@ if [[ "$TERMIX_ENABLED" == "1" ]]; then
 fi
 
 export DEBIAN_FRONTEND=noninteractive
-apt-get update
-apt-get full-upgrade -y
-apt-get install -y --no-install-recommends \
+cat >/etc/apt/apt.conf.d/99-ai-dev-timeouts <<'EOF'
+Acquire::Retries "3";
+Acquire::http::Timeout "60";
+Acquire::https::Timeout "60";
+DPkg::Lock::Timeout "300";
+Dpkg::Use-Pty "0";
+EOF
+
+stage 5 "Refreshing Debian package indexes"
+timeout --foreground 15m apt-get update
+
+stage 10 "Upgrading Debian packages"
+timeout --foreground 60m apt-get full-upgrade -y
+
+stage 18 "Installing base development, keyring, and terminal packages"
+timeout --foreground 45m apt-get install -y --no-install-recommends \
   sudo openssh-server ca-certificates curl wget git gh gnupg \
   build-essential python3 python3-dev python3-pip python3-venv pipx \
   jq ripgrep fd-find tmux mc unzip zip rsync shellcheck openssl \
   make cmake pkg-config less nano vim bash-completion locales xz-utils \
   iproute2 procps dbus dbus-user-session gnome-keyring libsecret-tools \
   libsecret-1-0 libpam-gnome-keyring python3-keyring pinentry-curses pass keyutils
-apt-get autoremove -y
+timeout --foreground 15m apt-get autoremove -y
 
 if ! command -v mc >/dev/null 2>&1; then
   echo "Midnight Commander installation verification failed." >&2
   exit 1
 fi
 
+stage 25 "Configuring the development account and SSH access"
 systemctl enable --now ssh
 
 if ! id "$DEV_USER" >/dev/null 2>&1; then
@@ -982,8 +1111,10 @@ EOF
 fi
 
 # code-server: official Debian installer.
-curl -fsSL https://code-server.dev/install.sh -o /tmp/install-code-server.sh
-sh /tmp/install-code-server.sh
+stage 30 "Installing and configuring code-server"
+curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 300 \
+  https://code-server.dev/install.sh -o /tmp/install-code-server.sh
+timeout --foreground 15m sh /tmp/install-code-server.sh
 rm -f /tmp/install-code-server.sh
 
 install -d -m 0700 -o "$DEV_USER" -g "$DEV_USER" "$DEV_HOME/.config/code-server"
@@ -1078,9 +1209,50 @@ EOF
 chmod 0644 /etc/ai-development-web.env
 
 # FileBrowser Quantum: authenticated browser file manager for /srv/workspace.
+stage 40 "Installing and verifying FileBrowser Quantum"
+validate_filebrowser_config() {
+  local config_file=$1
+  local validation_log=/tmp/filebrowser-config-validation.log
+  local rc=0
+
+  rm -f "$validation_log"
+  # There is no dedicated config-validation subcommand. A valid configuration
+  # starts the long-running server, so timeout(1) returning 124 is expected.
+  # Invalid YAML/schema exits earlier and records a fatal parser error.
+  set +e
+  timeout --foreground --signal=TERM --kill-after=5s 12s \
+    runuser -u "$DEV_USER" -- env \
+      HOME="$DEV_HOME" USER="$DEV_USER" \
+      FILEBROWSER_CONFIG="$config_file" \
+      FILEBROWSER_ADMIN_PASSWORD="$FILE_MANAGER_PASSWORD" \
+      /usr/local/bin/filebrowser -c "$config_file" \
+      >"$validation_log" 2>&1
+  rc=$?
+  set -e
+  pkill -TERM -u "$DEV_USER" -x filebrowser >/dev/null 2>&1 || true
+
+  if grep -Eqi 'fatal|error unmarshaling|unknown field|unable to load config' "$validation_log"; then
+    echo "ERROR: FileBrowser Quantum rejected the generated configuration." >&2
+    cat "$validation_log" >&2
+    return 1
+  fi
+
+  if [[ $rc -ne 124 && $rc -ne 137 && $rc -ne 143 ]]; then
+    echo "ERROR: FileBrowser Quantum configuration preflight exited unexpectedly with status $rc." >&2
+    cat "$validation_log" >&2
+    return 1
+  fi
+
+  echo "FileBrowser Quantum configuration preflight passed."
+}
+
 install_filebrowser_quantum() {
   local arch asset_name asset_url api_url release_json tag_name tmp_binary
-  local current_major new_major version_text config_file
+  local current_major new_major version_text config_file config_backup
+
+  # A repair run may encounter an existing active or restart-looping service.
+  # Stop it before replacing the binary or touching the database/configuration.
+  systemctl stop filebrowser-quantum.service >/dev/null 2>&1 || true
 
   case "$(dpkg --print-architecture)" in
     amd64) arch="amd64" ;;
@@ -1104,7 +1276,7 @@ install_filebrowser_quantum() {
 
   # Resolve the latest stable release through the GitHub API. This gives us a
   # reliable release tag for selecting the matching v1/v2 configuration schema.
-  if curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 \
+  if curl -fsSL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 90 \
       -H 'Accept: application/vnd.github+json' \
       "$api_url" -o "$release_json"; then
     tag_name=$(jq -r '.tag_name // empty' "$release_json")
@@ -1122,7 +1294,7 @@ install_filebrowser_quantum() {
     asset_url="https://github.com/gtsteffaniak/filebrowser/releases/latest/download/${asset_name}"
   fi
 
-  curl -fL --retry 3 --retry-all-errors --connect-timeout 20 \
+  curl -fL --retry 3 --retry-all-errors --connect-timeout 20 --max-time 600 \
     "$asset_url" -o "$tmp_binary"
   chmod 0755 "$tmp_binary"
 
@@ -1157,6 +1329,12 @@ install_filebrowser_quantum() {
     "$DEV_HOME/.cache/filebrowser"
 
   config_file="$DEV_HOME/.config/filebrowser/config.yaml"
+  config_backup=""
+  if [[ -f "$config_file" ]]; then
+    config_backup="${config_file}.bak.$(date +%Y%m%d-%H%M%S)"
+    cp -a "$config_file" "$config_backup"
+  fi
+
   if [[ "$new_major" -ge 2 ]]; then
     cat >"$config_file" <<EOF
 http:
@@ -1189,7 +1367,6 @@ EOF
     cat >"$config_file" <<EOF
 server:
   port: $FILE_MANAGER_PORT
-  address: "0.0.0.0"
   database: "$DEV_HOME/.local/share/filebrowser/database.db"
   cacheDir: "$DEV_HOME/.cache/filebrowser"
   cacheDirCleanup: true
@@ -1209,6 +1386,16 @@ EOF
   fi
   chown "$DEV_USER:$DEV_USER" "$config_file"
   chmod 0600 "$config_file"
+
+  if ! validate_filebrowser_config "$config_file"; then
+    if [[ -n "$config_backup" && -f "$config_backup" ]]; then
+      cp -a "$config_backup" "$config_file"
+      chown "$DEV_USER:$DEV_USER" "$config_file"
+      chmod 0600 "$config_file"
+      echo "Previous FileBrowser configuration restored after failed preflight." >&2
+    fi
+    return 1
+  fi
 
   cat >/etc/filebrowser-quantum.env <<EOF
 FILEBROWSER_ADMIN_PASSWORD=$FILE_MANAGER_PASSWORD
@@ -1254,7 +1441,8 @@ EOF
 
   systemctl daemon-reload
   systemctl reset-failed filebrowser-quantum.service >/dev/null 2>&1 || true
-  systemctl enable --now filebrowser-quantum.service
+  systemctl enable filebrowser-quantum.service >/dev/null
+  systemctl restart filebrowser-quantum.service
 }
 
 filebrowser_diagnostics() {
@@ -1337,6 +1525,7 @@ EOF
   chmod 0644 /etc/ai-development-file-manager.env
 fi
 
+stage 50 "Configuring headless GNOME Keyring and credential helpers"
 # Headless credential-store support. GNOME Keyring provides the Secret Service
 # implementation; libsecret and Python keyring clients can use it through D-Bus.
 loginctl enable-linger "$DEV_USER" >/dev/null 2>&1 || true
@@ -1409,6 +1598,7 @@ exit "$failed"
 KEYSTATUS
 chmod 0755 /usr/local/bin/keyring-status
 
+stage 58 "Installing and verifying Termix and its container runtime"
 # Termix: web-based SSH terminal and server-management panel.
 configure_nested_docker_storage() {
   local tmp_json
@@ -1431,7 +1621,7 @@ EOF
 }
 
 install_termix() {
-  apt-get install -y --no-install-recommends docker.io docker-compose
+  timeout --foreground 30m apt-get install -y --no-install-recommends docker.io docker-compose
   systemctl enable docker.service containerd.service
   systemctl restart containerd.service || true
   systemctl restart docker.service || true
@@ -1470,8 +1660,8 @@ volumes:
     name: termix-data
 EOF
   chmod 0644 /opt/termix/compose.yaml
-  docker compose -f /opt/termix/compose.yaml pull
-  docker compose -f /opt/termix/compose.yaml up -d --remove-orphans
+  timeout --foreground 30m docker compose -f /opt/termix/compose.yaml pull
+  timeout --foreground 10m docker compose -f /opt/termix/compose.yaml up -d --remove-orphans
 
   cat >/etc/ai-development-termix.env <<EOF
 TERMIX_ENABLED=1
@@ -1595,6 +1785,7 @@ EOF
   chmod 0644 /etc/ai-development-termix.env
 fi
 
+stage 68 "Installing selected AI coding agents"
 # Selected AI coding agents.
 has_agent() {
   local agent=$1
@@ -1654,13 +1845,13 @@ install_node22() {
 
   base=https://nodejs.org/dist/latest-v22.x
   tmp_dir=$(mktemp -d)
-  curl -fsSL "$base/SHASUMS256.txt" -o "$tmp_dir/SHASUMS256.txt"
+  curl -fsSL --retry 3 --connect-timeout 20 --max-time 120 "$base/SHASUMS256.txt" -o "$tmp_dir/SHASUMS256.txt"
   node_file=$(awk -v arch="$node_arch" \
     '$2 ~ ("^node-v22\\.[0-9]+\\.[0-9]+-linux-" arch "\\.tar\\.xz$") {print $2}' \
     "$tmp_dir/SHASUMS256.txt" | sort -V | tail -n 1)
   [[ -n "$node_file" ]] || { echo 'Unable to determine the current Node.js 22 build.' >&2; rm -rf "$tmp_dir"; return 1; }
 
-  curl -fsSL "$base/$node_file" -o "$tmp_dir/$node_file"
+  curl -fsSL --retry 3 --connect-timeout 20 --max-time 600 "$base/$node_file" -o "$tmp_dir/$node_file"
   (cd "$tmp_dir" && grep "  $node_file\$" SHASUMS256.txt | sha256sum -c -)
 
   rm -rf /opt/node-v22
@@ -1699,14 +1890,14 @@ install_claude_code() {
   esac
 
   echo 'Checking access to the Claude Code download service...'
-  curl -fsSL --retry 3 --retry-delay 2 \
+  curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 120 \
     https://downloads.claude.ai/claude-code-releases/latest \
     -o /tmp/claude-code-latest-version
   printf 'Available Claude Code release: %s\n' "$(tr -d '[:space:]' </tmp/claude-code-latest-version)"
   rm -f /tmp/claude-code-latest-version
 
   install -d -m 0755 /etc/apt/keyrings
-  curl -fsSL --retry 3 --retry-delay 2 \
+  curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 120 \
     https://downloads.claude.ai/keys/claude-code.asc \
     -o "$key_file"
 
@@ -1724,8 +1915,8 @@ install_claude_code() {
     'deb [signed-by=/etc/apt/keyrings/claude-code.asc] https://downloads.claude.ai/claude-code/apt/stable stable main' \
     >"$source_file"
 
-  apt-get update
-  apt-get install -y --no-install-recommends claude-code
+  timeout --foreground 15m apt-get update
+  timeout --foreground 30m apt-get install -y --no-install-recommends claude-code
   run_as_dev claude --version
 }
 
@@ -1760,32 +1951,38 @@ if has_agent gemini || has_agent copilot; then
 fi
 
 if has_agent claude; then
+  stage 69 "Installing Claude Code"
   install_agent claude 'Claude Code' install_claude_code
 fi
 
 if has_agent codex; then
+  stage 71 "Installing OpenAI Codex CLI"
   install_agent codex 'OpenAI Codex CLI' \
-    run_as_dev_shell 'set -o pipefail; curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh'
+    run_as_dev_shell 'set -o pipefail; timeout --foreground 20m bash -c "curl -fsSL --retry 3 --connect-timeout 20 --max-time 600 https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh"'
 fi
 
 if has_agent gemini; then
+  stage 73 "Installing Google Gemini CLI"
   install_agent gemini 'Google Gemini CLI' \
-    run_as_dev npm install -g @google/gemini-cli@latest
+    run_as_dev timeout --foreground 20m npm install -g @google/gemini-cli@latest
 fi
 
 if has_agent copilot; then
+  stage 75 "Installing GitHub Copilot CLI"
   install_agent copilot 'GitHub Copilot CLI' \
-    run_as_dev env npm_config_ignore_scripts=false npm install -g @github/copilot@latest
+    run_as_dev env npm_config_ignore_scripts=false timeout --foreground 20m npm install -g @github/copilot@latest
 fi
 
 if has_agent aider; then
+  stage 77 "Installing Aider"
   install_agent aider 'Aider' \
-    run_as_dev_shell 'set -o pipefail; curl -LsSf https://aider.chat/install.sh | sh'
+    run_as_dev_shell 'set -o pipefail; timeout --foreground 20m bash -c "curl -LsSf --retry 3 --connect-timeout 20 --max-time 600 https://aider.chat/install.sh | sh"'
 fi
 
 if has_agent opencode; then
+  stage 79 "Installing OpenCode"
   install_agent opencode 'OpenCode' \
-    run_as_dev_shell 'set -o pipefail; curl -fsSL https://opencode.ai/install | bash'
+    run_as_dev_shell 'set -o pipefail; timeout --foreground 20m bash -c "curl -fsSL --retry 3 --connect-timeout 20 --max-time 600 https://opencode.ai/install | bash"'
 fi
 
 link_user_command() {
@@ -1804,10 +2001,11 @@ printf 'SELECTED_AGENTS=%q\n' "$SELECTED_AGENTS" >/etc/ai-agent-selection
 printf '%s\n' "$DEV_USER" >/etc/ai-development-user
 chmod 0644 /etc/ai-agent-selection /etc/ai-development-user
 
+stage 80 "Installing Robot Framework and RobotCode"
 # Stable system-level Robot Framework tool environment.
 python3 -m venv /opt/robotframework
-/opt/robotframework/bin/python -m pip install --upgrade pip setuptools wheel
-/opt/robotframework/bin/python -m pip install --upgrade robotframework 'robotcode[all]'
+timeout --foreground 15m /opt/robotframework/bin/python -m pip install --upgrade pip setuptools wheel
+timeout --foreground 30m /opt/robotframework/bin/python -m pip install --upgrade robotframework 'robotcode[all]'
 for app in robot rebot libdoc robotcode; do
   if [[ -x "/opt/robotframework/bin/$app" ]]; then
     ln -sfn "/opt/robotframework/bin/$app" "/usr/local/bin/$app"
@@ -1914,6 +2112,7 @@ fi
 runuser -u "$DEV_USER" -- env HOME="$DEV_HOME" git config --global init.defaultBranch main
 runuser -u "$DEV_USER" -- env HOME="$DEV_HOME" git config --global pull.rebase false
 
+stage 88 "Installing and verifying code-server extensions"
 # Open VSX extension installation. Core development extensions are verified;
 # optional AI integrations remain best-effort because availability can vary.
 code_server_extension_installed() {
@@ -2416,6 +2615,7 @@ Web IDE service:    systemctl status code-server@$DEV_USER
 
 EOF
 
+stage 96 "Running the final Robot Framework smoke test"
 # Smoke test the installed Robot Framework environment.
 cd "$PROJECT"
 "$PROJECT/.venv/bin/python" -m robot --outputdir results tests
@@ -2425,11 +2625,13 @@ rm -f /root/claude-dev.env
 if ((${#FAILED_AGENTS[@]} > 0)); then
   printf '%s\n' "${FAILED_AGENTS[@]}" >/var/log/ai-agent-install-failures
   chmod 0644 /var/log/ai-agent-install-failures
+  stage 99 "Base environment complete; one or more optional AI agents failed"
   printf '[%s] Provisioning completed with AI-agent failures: %s\n' \
     "$(date '+%F %T')" "${FAILED_AGENTS[*]}"
   exit 20
 fi
 rm -f /var/log/ai-agent-install-failures
+stage 100 "Provisioning completed successfully"
 printf '[%s] Provisioning completed\n' "$(date '+%F %T')"
 PROVISION
   chmod 0700 "$provision_file"
@@ -2490,7 +2692,7 @@ provision_container() {
 This includes package upgrades, code-server, FileBrowser Quantum, Termix, selected AI coding agents, Python, Robot Framework, GitHub CLI, helper commands, and smoke tests."
 
   set +e
-  pct exec "$CTID" -- /root/claude-dev-provision.sh >>"$LOG_FILE" 2>&1
+  run_provision_with_progress
   rc=$?
   set -e
 
@@ -2498,8 +2700,12 @@ This includes package upgrades, code-server, FileBrowser Quantum, Termix, select
     PROVISION_WARNING=$(pct exec "$CTID" -- bash -lc       'printf "The environment is operational, but these selected AI agents failed to install: "; paste -sd", " /var/log/ai-agent-install-failures 2>/dev/null || true'       2>/dev/null || true)
     pct exec "$CTID" -- bash -lc 'tail -n 120 /var/log/claude-dev-provision.log' >>"$LOG_FILE" 2>&1 || true
   elif ((rc != 0)); then
-    pct exec "$CTID" -- bash -lc 'tail -n 120 /var/log/claude-dev-provision.log' >>"$LOG_FILE" 2>&1 || true
-    show_error_details "Provisioning failed inside LXC $CTID. The container was left intact for diagnosis."
+    pct exec "$CTID" -- bash -lc 'tail -n 160 /var/log/claude-dev-provision.log' >>"$LOG_FILE" 2>&1 || true
+    if ((rc == 124)); then
+      show_error_details "Provisioning inside LXC $CTID exceeded the 90-minute watchdog. The container was left intact. Review the final displayed stage and logs before retrying."
+    else
+      show_error_details "Provisioning failed inside LXC $CTID. The container was left intact for diagnosis."
+    fi
     return 1
   fi
 
