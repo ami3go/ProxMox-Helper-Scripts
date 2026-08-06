@@ -11,7 +11,7 @@ set -Eeuo pipefail
 shopt -s inherit_errexit 2>/dev/null || true
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_VERSION="2.2.13"
+readonly SCRIPT_VERSION="2.2.14"
 readonly BACKTITLE="AI Development LXC • Proxmox VE"
 readonly STATE_DIR="/etc/claude-dev-lxc"
 readonly LOG_DIR="/var/log/claude-dev-lxc"
@@ -155,19 +155,39 @@ read_provision_status() {
     2>/dev/null | tail -n 1
 }
 
+provision_remote_log_path() {
+  printf '/var/log/ai-dev-provision/run-%s.log' "$PROVISION_RUN_ID"
+}
+
 read_provision_log_mtime() {
-  pct exec "$CTID" -- bash -lc \
-    'stat -Lc %Y /var/log/claude-dev-provision.log 2>/dev/null || printf 0' \
-    2>/dev/null | tr -dc '0-9'
+  local remote_log output
+  remote_log=$(provision_remote_log_path)
+  output=$(pct exec "$CTID" -- stat -Lc %Y -- "$remote_log" 2>/dev/null || true)
+  if [[ "$output" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$output"
+  else
+    printf '0'
+  fi
 }
 
 read_provision_last_line() {
-  pct exec "$CTID" -- bash -lc \
-    'tail -n 1 /var/log/claude-dev-provision.log 2>/dev/null || true' \
-    2>/dev/null |
-    tr '\r\n' '  ' |
-    sed 's/[^[:print:]\t]//g' |
-    cut -c1-110
+  local remote_log
+  remote_log=$(provision_remote_log_path)
+  pct exec "$CTID" -- tail -n 1 -- "$remote_log" 2>/dev/null || true
+}
+
+prepare_remote_provision_log() {
+  local remote_log
+  remote_log=$(provision_remote_log_path)
+
+  # Create the exact run log before the progress reader starts. This prevents a
+  # race where tail/stat are invoked before the embedded provisioner has made
+  # the log and also avoids shell-string quoting of the path entirely.
+  pct exec "$CTID" -- install -d -m 0750 /var/log/ai-dev-provision >/dev/null 2>&1 || return 1
+  pct exec "$CTID" -- touch -- "$remote_log" >/dev/null 2>&1 || return 1
+  pct exec "$CTID" -- chmod 0640 -- "$remote_log" >/dev/null 2>&1 || return 1
+  pct exec "$CTID" -- ln -sfn -- "$remote_log" /var/log/claude-dev-provision.log >/dev/null 2>&1 || return 1
+  pct exec "$CTID" -- bash -c 'printf "%s\n" "$1" > /run/ai-dev-provision.log-path' _ "$remote_log" >/dev/null 2>&1 || return 1
 }
 
 run_provision_with_progress() {
@@ -176,6 +196,10 @@ run_provision_with_progress() {
   local log_mtime idle_seconds last_line idle_note
 
   pct exec "$CTID" -- rm -f /run/ai-dev-provision.status >/dev/null 2>&1 || true
+  if ! prepare_remote_provision_log; then
+    log "Unable to create the current provisioning log inside LXC $CTID."
+    return 1
+  fi
 
   # Run provisioning asynchronously so the TUI can remain responsive and show
   # the current stage instead of leaving a static or blank screen.
@@ -214,12 +238,13 @@ run_provision_with_progress() {
         idle_note="WARNING: no new log output for $(format_elapsed "$idle_seconds"). The current network or package command may be stalled."
       fi
 
-      last_line=$(read_provision_last_line || true)
-      [[ -n "$last_line" ]] || last_line="No detailed log line is available yet."
+      last_line=$(read_provision_last_line 2>/dev/null || true)
+      last_line=$(printf '%s' "$last_line" | tr '\r\n' '  ' | sed 's/[^[:print:]\t]//g' | cut -c1-110)
+      [[ -n "$last_line" ]] || last_line="The run log exists; waiting for the first provisioning message."
 
       printf 'XXX\n%s\n' "$progress"
-      printf '%s\n\nElapsed: %s\n%s\nLast activity: %s\n\nDetailed host log: %s\nInside LXC current run: /var/log/claude-dev-provision.log\n' \
-        "$description" "$(format_elapsed "$elapsed")" "$idle_note" "$last_line" "$LOG_FILE"
+      printf '%s\n\nElapsed: %s\n%s\nLast activity: %s\n\nDetailed host log: %s\nInside LXC current run: %s\n' \
+        "$description" "$(format_elapsed "$elapsed")" "$idle_note" "$last_line" "$LOG_FILE" "$(provision_remote_log_path)"
       printf 'XXX\n'
       sleep 2
     done
