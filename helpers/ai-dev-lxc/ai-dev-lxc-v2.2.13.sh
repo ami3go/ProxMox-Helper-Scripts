@@ -11,7 +11,7 @@ set -Eeuo pipefail
 shopt -s inherit_errexit 2>/dev/null || true
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_VERSION="2.2.12"
+readonly SCRIPT_VERSION="2.2.13"
 readonly BACKTITLE="AI Development LXC • Proxmox VE"
 readonly STATE_DIR="/etc/claude-dev-lxc"
 readonly LOG_DIR="/var/log/claude-dev-lxc"
@@ -28,6 +28,7 @@ readonly DEFAULT_TERMIX_PORT="8082"
 LOG_FILE=""
 LAST_ERROR=""
 PROVISION_WARNING=""
+PROVISION_RUN_ID=""
 
 # Runtime configuration
 CTID=""
@@ -156,7 +157,7 @@ read_provision_status() {
 
 read_provision_log_mtime() {
   pct exec "$CTID" -- bash -lc \
-    'stat -c %Y /var/log/claude-dev-provision.log 2>/dev/null || printf 0' \
+    'stat -Lc %Y /var/log/claude-dev-provision.log 2>/dev/null || printf 0' \
     2>/dev/null | tr -dc '0-9'
 }
 
@@ -217,7 +218,7 @@ run_provision_with_progress() {
       [[ -n "$last_line" ]] || last_line="No detailed log line is available yet."
 
       printf 'XXX\n%s\n' "$progress"
-      printf '%s\n\nElapsed: %s\n%s\nLast activity: %s\n\nDetailed host log: %s\nInside LXC: /var/log/claude-dev-provision.log\n' \
+      printf '%s\n\nElapsed: %s\n%s\nLast activity: %s\n\nDetailed host log: %s\nInside LXC current run: /var/log/claude-dev-provision.log\n' \
         "$description" "$(format_elapsed "$elapsed")" "$idle_note" "$last_line" "$LOG_FILE"
       printf 'XXX\n'
       sleep 2
@@ -965,6 +966,7 @@ FILE_MANAGER_PASSWORD_B64='$(b64 "$FILE_MANAGER_PASSWORD")'
 TERMIX_ENABLED_B64='$(b64 "$TERMIX_ENABLED")'
 TERMIX_PORT_B64='$(b64 "$TERMIX_PORT")'
 TERMIX_IMAGE_B64='$(b64 "$TERMIX_IMAGE")'
+PROVISION_RUN_ID_B64='$(b64 "$PROVISION_RUN_ID")'
 ENV
   chmod 0600 "$env_file"
 
@@ -972,8 +974,32 @@ ENV
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-LOG_FILE=/var/log/claude-dev-provision.log
+source /root/claude-dev.env
+
+decode() { printf '%s' "$1" | base64 -d; }
+PROVISION_RUN_ID=$(decode "$PROVISION_RUN_ID_B64")
+if [[ ! "$PROVISION_RUN_ID" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  printf 'Invalid provisioning run identifier\n' >&2
+  exit 1
+fi
+
+PROVISION_LOG_DIR=/var/log/ai-dev-provision
+LOG_FILE="$PROVISION_LOG_DIR/run-$PROVISION_RUN_ID.log"
+CURRENT_LOG=/var/log/claude-dev-provision.log
 STATUS_FILE=/run/ai-dev-provision.status
+LOG_PATH_FILE=/run/ai-dev-provision.log-path
+PROVISION_STARTED_AT=$(date --iso-8601=seconds)
+
+install -d -m 0750 "$PROVISION_LOG_DIR"
+: >"$LOG_FILE"
+chmod 0640 "$LOG_FILE"
+ln -sfn "$LOG_FILE" "$CURRENT_LOG"
+printf '%s\n' "$LOG_FILE" >"$LOG_PATH_FILE"
+# Retain recent run logs while preventing unbounded growth on repeated repairs.
+find "$PROVISION_LOG_DIR" -maxdepth 1 -type f -name 'run-*.log' -printf '%T@ %p\n' 2>/dev/null \
+  | sort -nr | awk 'NR > 12 {sub(/^[^ ]+ /, ""); print}' \
+  | xargs -r rm -f --
+
 exec >>"$LOG_FILE" 2>&1
 
 stage() {
@@ -984,12 +1010,9 @@ stage() {
   printf '[%s] STAGE %s%%: %s\n' "$(date '+%F %T')" "$percent" "$description"
 }
 
-printf '\n[%s] Provisioning started\n' "$(date '+%F %T')"
+printf '[%s] Provisioning run %s started\n' "$(date '+%F %T')" "$PROVISION_RUN_ID"
 stage 1 "Starting provisioner and reading configuration"
 
-source /root/claude-dev.env
-
-decode() { printf '%s' "$1" | base64 -d; }
 DEV_USER=$(decode "$DEV_USER_B64")
 DEV_PASSWORD=$(decode "$DEV_PASSWORD_B64")
 SSH_KEY=$(decode "$SSH_KEY_B64")
@@ -1162,7 +1185,7 @@ verify_code_server_local() {
   if ! systemctl is-active --quiet "$service"; then
     echo "ERROR: code-server service is not active after installation." >&2
     systemctl status "$service" --no-pager >&2 || true
-    journalctl -u "$service" -n 100 --no-pager >&2 || true
+    journalctl -u "$service" --since "$PROVISION_STARTED_AT" --no-pager >&2 || true
     return 1
   fi
 
@@ -1170,7 +1193,7 @@ verify_code_server_local() {
     echo "ERROR: code-server /healthz did not return a valid response at $health_url." >&2
     curl -v --max-time 5 "$health_url" >&2 || true
     systemctl status "$service" --no-pager >&2 || true
-    journalctl -u "$service" -n 100 --no-pager >&2 || true
+    journalctl -u "$service" --since "$PROVISION_STARTED_AT" --no-pager >&2 || true
     return 1
   fi
 
@@ -1457,7 +1480,7 @@ filebrowser_diagnostics() {
   echo "--- service status ---" >&2
   systemctl status filebrowser-quantum.service --no-pager >&2 2>/dev/null || true
   echo "--- journal ---" >&2
-  journalctl -u filebrowser-quantum.service -n 160 --no-pager >&2 2>/dev/null || true
+  journalctl -u filebrowser-quantum.service --since "$PROVISION_STARTED_AT" --no-pager >&2 2>/dev/null || true
 }
 
 verify_filebrowser_local() {
@@ -1616,7 +1639,7 @@ docker_diagnostics() {
     echo "/etc/docker/daemon.json does not exist." >&2
   fi
   echo "=== Docker journal ===" >&2
-  journalctl -u docker.service -u containerd.service -n 180 --no-pager -l >&2 || true
+  journalctl -u docker.service -u containerd.service --since "$PROVISION_STARTED_AT" --no-pager -l >&2 || true
 }
 
 docker_socket_path() {
@@ -1756,7 +1779,7 @@ install_termix() {
 
     echo "Docker is not active after package installation; attempting one non-blocking start."
     if ! start_docker_once; then
-      journal_text=$(journalctl -u docker.service -u containerd.service -n 160 --no-pager -l 2>/dev/null || true)
+      journal_text=$(journalctl -u docker.service -u containerd.service --since "$PROVISION_STARTED_AT" --no-pager -l 2>/dev/null || true)
       if grep -Eqi 'overlay|overlay2|operation not permitted|failed to mount|invalid argument' <<<"$journal_text"; then
         echo "Docker startup indicates a nested-LXC storage-driver problem; applying vfs once." >&2
         timeout --foreground 60s systemctl stop docker.service docker.socket 2>/dev/null || true
@@ -2839,6 +2862,8 @@ provision_container() {
     return 1
   fi
   ensure_termix_lxc_features || return 1
+  PROVISION_RUN_ID="$(date +%Y%m%d-%H%M%S)-${CTID}-$$-$RANDOM"
+  log "Starting LXC provisioning run $PROVISION_RUN_ID"
   write_provision_files
   msg_info "Installing the headless development toolchain inside LXC $CTID…
 
@@ -2851,13 +2876,13 @@ This includes package upgrades, code-server, FileBrowser Quantum, Termix, select
 
   if ((rc == 20)); then
     PROVISION_WARNING=$(pct exec "$CTID" -- bash -lc       'printf "The environment is operational, but these selected AI agents failed to install: "; paste -sd", " /var/log/ai-agent-install-failures 2>/dev/null || true'       2>/dev/null || true)
-    pct exec "$CTID" -- bash -lc 'tail -n 120 /var/log/claude-dev-provision.log' >>"$LOG_FILE" 2>&1 || true
+    pct exec "$CTID" -- bash -lc 'p=$(cat /run/ai-dev-provision.log-path 2>/dev/null || readlink -f /var/log/claude-dev-provision.log 2>/dev/null || true); printf \"=== Current LXC provision log: %s ===\\n\" \"${p:-unavailable}\"; [[ -n $p && -f $p ]] && tail -n 120 \"$p\"' >>"$LOG_FILE" 2>&1 || true
   elif ((rc != 0)); then
-    pct exec "$CTID" -- bash -lc 'tail -n 160 /var/log/claude-dev-provision.log' >>"$LOG_FILE" 2>&1 || true
+    pct exec "$CTID" -- bash -lc 'p=$(cat /run/ai-dev-provision.log-path 2>/dev/null || readlink -f /var/log/claude-dev-provision.log 2>/dev/null || true); printf \"=== Current LXC provision log: %s ===\\n\" \"${p:-unavailable}\"; [[ -n $p && -f $p ]] && tail -n 160 \"$p\"' >>"$LOG_FILE" 2>&1 || true
     if ((rc == 124)); then
-      show_error_details "Provisioning inside LXC $CTID exceeded the 90-minute watchdog. The container was left intact. Review the final displayed stage and logs before retrying."
+      show_error_details "Provisioning run $PROVISION_RUN_ID inside LXC $CTID exceeded the 90-minute watchdog. The container was left intact. Review the final displayed stage and logs before retrying."
     else
-      show_error_details "Provisioning failed inside LXC $CTID. The container was left intact for diagnosis."
+      show_error_details "Provisioning run $PROVISION_RUN_ID failed inside LXC $CTID. The container was left intact for diagnosis."
     fi
     return 1
   fi
