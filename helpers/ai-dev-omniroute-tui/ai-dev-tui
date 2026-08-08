@@ -134,11 +134,11 @@ run_shell_screen() {
 }
 
 save_config() {
-  umask 077
   cat >"$CONFIG_FILE" <<EOF
 PROJECTS_DIR=$(printf '%q' "$PROJECTS_DIR")
 OMNIROUTE_PORT=$(printf '%q' "$OMNIROUTE_PORT")
 EOF
+  chmod 600 "$CONFIG_FILE"
 }
 
 install_base() {
@@ -188,9 +188,20 @@ This is the recommended runtime line for OmniRoute."; then
   local tmp
   tmp="$(mktemp)"
   trap 'rm -f "$tmp"' RETURN
+  set +e
   curl -fsSL https://deb.nodesource.com/setup_24.x -o "$tmp"
+  local rc1=$?
   sudo_cmd bash "$tmp"
+  local rc2=$?
   sudo_cmd apt-get install -y nodejs
+  local rc3=$?
+  set -e
+  echo
+  if [[ $rc1 -eq 0 && $rc2 -eq 0 && $rc3 -eq 0 ]]; then
+    echo "Node.js 24 installed."
+  else
+    echo "Node.js installation returned an error."
+  fi
   node --version || true
   npm --version || true
   read -r -p "Press Enter to return..." _
@@ -263,7 +274,16 @@ install_robot() {
   fi
   mkdir -p "$HOME/.venvs"
   if [[ ! -d "$HOME/.venvs/robot" ]]; then
+    set +e
     python3 -m venv "$HOME/.venvs/robot"
+    local rc=$?
+    set -e
+    if [[ $rc -ne 0 ]]; then
+      ui_msg "Failed to create the Robot Framework virtual environment.
+
+Ensure python3-venv is installed (Install base packages first)."
+      return
+    fi
   fi
   run_shell_screen "Install/update Robot Framework" \
     "'$HOME/.venvs/robot/bin/python' -m pip install --upgrade pip robotframework"
@@ -304,7 +324,7 @@ GitHub:     $gh_auth
 Node:       $(ver node --version)
 npm:        $(ver npm --version)
 Python:     $(ver python3 --version)
-Robot:      $([[ -x "$HOME/.venvs/robot/bin/robot" ]] && "$HOME/.venvs/robot/bin/robot" --version 2>/dev/null || echo "not installed")
+Robot:      $(if [[ -x "$HOME/.venvs/robot/bin/robot" ]]; then "$HOME/.venvs/robot/bin/robot" --version 2>/dev/null || echo "installed (error running --version)"; else echo "not installed"; fi)
 OmniRoute:  $(ver omniroute --version)
 OmniRoute:  HTTP $omniroute_http on 127.0.0.1:$OMNIROUTE_PORT
 Codex:      $(ver codex --version)
@@ -361,7 +381,6 @@ with mode 600.
 
 Cancel to leave unchanged.")" || return
       if [[ -n "$key" ]]; then
-        umask 077
         printf 'export OMNIROUTE_API_KEY=%q\n' "$key" >"$SECRETS_FILE"
         chmod 600 "$SECRETS_FILE"
         export OMNIROUTE_API_KEY="$key"
@@ -384,6 +403,10 @@ omniroute_service_install() {
   fi
   if ! have systemctl; then
     ui_msg "systemd/systemctl is unavailable in this container."
+    return
+  fi
+  if ! have node; then
+    ui_msg "Node.js is not on PATH. Install Node.js 24 first, then retry installing the OmniRoute service."
     return
   fi
 
@@ -411,8 +434,18 @@ RestartSec=5
 WantedBy=default.target
 EOF
 
+  set +e
   systemctl --user daemon-reload
+  local rc1=$?
   systemctl --user enable --now omniroute.service
+  local rc2=$?
+  set -e
+  if [[ $rc1 -ne 0 || $rc2 -ne 0 ]]; then
+    ui_msg "Failed to enable the OmniRoute user service.
+
+This usually means no systemd --user session is available in this container. Use 'Run OmniRoute in foreground' instead."
+    return
+  fi
 
   if ui_yesno "Enable user lingering so OmniRoute can stay active when you log out?
 
@@ -443,8 +476,9 @@ omniroute_menu() {
     5) omniroute_service_install ;;
     6) run_screen "OmniRoute foreground" omniroute ;;
     7)
-      run_shell_screen "OmniRoute endpoint test" \
-        "curl -i --max-time 5 'http://127.0.0.1:${OMNIROUTE_PORT}/v1/models' -H 'Authorization: Bearer ${OMNIROUTE_API_KEY:-not-set}'"
+      run_screen "OmniRoute endpoint test" \
+        curl -i --max-time 5 "http://127.0.0.1:${OMNIROUTE_PORT}/v1/models" \
+        -H "Authorization: Bearer ${OMNIROUTE_API_KEY:-not-set}"
       ;;
     8) run_screen "OmniRoute journal" journalctl --user -u omniroute.service -n 100 --no-pager ;;
   esac
@@ -524,7 +558,12 @@ select_project_dir() {
 $dir
 
 Create it?"; then
-      mkdir -p "$dir"
+      if ! mkdir -p "$dir" 2>/dev/null; then
+        ui_msg "Failed to create directory:
+
+$dir"
+        return 1
+      fi
     else
       return 1
     fi
