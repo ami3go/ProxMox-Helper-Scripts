@@ -1,0 +1,698 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+APP_NAME="AI Dev OmniRoute TUI"
+APP_VERSION="0.1.0"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ai-dev-tui"
+CONFIG_FILE="$CONFIG_DIR/config.env"
+SECRETS_FILE="$CONFIG_DIR/secrets.env"
+LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/ai-dev-tui"
+LOG_FILE="$LOG_DIR/ai-dev-tui.log"
+PROJECTS_DIR_DEFAULT="$HOME/projects"
+OMNIROUTE_PORT_DEFAULT="20128"
+
+mkdir -p "$CONFIG_DIR" "$LOG_DIR"
+touch "$LOG_FILE"
+chmod 700 "$CONFIG_DIR" || true
+
+# Load nvm when present so globally-installed npm CLIs are visible.
+export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
+if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+  # shellcheck source=/dev/null
+  source "$NVM_DIR/nvm.sh"
+fi
+
+# User configuration.
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck source=/dev/null
+  source "$CONFIG_FILE"
+fi
+
+PROJECTS_DIR="${PROJECTS_DIR:-$PROJECTS_DIR_DEFAULT}"
+OMNIROUTE_PORT="${OMNIROUTE_PORT:-$OMNIROUTE_PORT_DEFAULT}"
+
+# Optional local secret storage. File is chmod 600.
+if [[ -f "$SECRETS_FILE" ]]; then
+  chmod 600 "$SECRETS_FILE" || true
+  # shellcheck source=/dev/null
+  source "$SECRETS_FILE"
+fi
+
+log() {
+  printf '%s [%s] %s\n' "$(date -Is)" "$$" "$*" >>"$LOG_FILE"
+}
+
+have() {
+  command -v "$1" >/dev/null 2>&1
+}
+
+ver() {
+  local cmd="$1"; shift || true
+  if have "$cmd"; then
+    "$cmd" "$@" 2>/dev/null | head -n1 || true
+  else
+    printf 'not installed'
+  fi
+}
+
+sudo_cmd() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  elif have sudo; then
+    sudo "$@"
+  else
+    echo "This action requires root privileges and sudo is not installed." >&2
+    return 1
+  fi
+}
+
+ui_backend=""
+if have dialog; then
+  ui_backend="dialog"
+elif have whiptail; then
+  ui_backend="whiptail"
+else
+  echo "Neither 'dialog' nor 'whiptail' is installed."
+  echo "Run ./install.sh first."
+  exit 2
+fi
+
+ui_msg() {
+  "$ui_backend" --title "$APP_NAME" --msgbox "$1" 18 78
+}
+
+ui_yesno() {
+  "$ui_backend" --title "$APP_NAME" --yesno "$1" 15 76
+}
+
+ui_input() {
+  local prompt="$1"
+  local initial="${2:-}"
+  "$ui_backend" --title "$APP_NAME" --inputbox "$prompt" 12 78 "$initial" 3>&1 1>&2 2>&3
+}
+
+ui_password() {
+  "$ui_backend" --title "$APP_NAME" --passwordbox "$1" 12 78 3>&1 1>&2 2>&3
+}
+
+ui_menu() {
+  local title="$1"; shift
+  "$ui_backend" --title "$APP_NAME" --menu "$title" 24 90 16 "$@" 3>&1 1>&2 2>&3
+}
+
+run_screen() {
+  local title="$1"; shift
+  clear
+  echo "==== $title ===="
+  echo
+  log "RUN: $*"
+  set +e
+  "$@" 2>&1 | tee -a "$LOG_FILE"
+  local rc=${PIPESTATUS[0]}
+  set -e
+  echo
+  echo "Exit code: $rc"
+  read -r -p "Press Enter to return to the TUI..." _
+  return "$rc"
+}
+
+run_shell_screen() {
+  local title="$1"
+  local command="$2"
+  clear
+  echo "==== $title ===="
+  echo
+  log "RUN SHELL: $command"
+  set +e
+  bash -lc "$command" 2>&1 | tee -a "$LOG_FILE"
+  local rc=${PIPESTATUS[0]}
+  set -e
+  echo
+  echo "Exit code: $rc"
+  read -r -p "Press Enter to return to the TUI..." _
+  return "$rc"
+}
+
+save_config() {
+  umask 077
+  cat >"$CONFIG_FILE" <<EOF
+PROJECTS_DIR=$(printf '%q' "$PROJECTS_DIR")
+OMNIROUTE_PORT=$(printf '%q' "$OMNIROUTE_PORT")
+EOF
+}
+
+install_base() {
+  clear
+  echo "==== Install base packages ===="
+  local packages=(
+    ca-certificates curl wget git jq dialog
+    gnupg lsb-release openssh-client
+    build-essential pkg-config
+    python3 python3-pip python3-venv
+    unzip zip ripgrep fd-find tmux
+  )
+  log "Installing base packages: ${packages[*]}"
+  set +e
+  sudo_cmd apt-get update
+  local rc1=$?
+  sudo_cmd apt-get install -y "${packages[@]}"
+  local rc2=$?
+  set -e
+  echo
+  if [[ $rc1 -eq 0 && $rc2 -eq 0 ]]; then
+    echo "Base packages installed."
+  else
+    echo "Base package installation returned an error."
+  fi
+  read -r -p "Press Enter to return..." _
+}
+
+install_node24() {
+  if have node; then
+    local major
+    major="$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+    if [[ "$major" -ge 24 ]]; then
+      ui_msg "Node.js $(node --version) is already installed. OmniRoute currently recommends Node.js 24.x."
+      return
+    fi
+  fi
+
+  if ! ui_yesno "Install Node.js 24.x from the NodeSource Debian/Ubuntu repository?
+
+This is the recommended runtime line for OmniRoute."; then
+    return
+  fi
+
+  clear
+  echo "==== Install Node.js 24 ===="
+  local tmp
+  tmp="$(mktemp)"
+  trap 'rm -f "$tmp"' RETURN
+  curl -fsSL https://deb.nodesource.com/setup_24.x -o "$tmp"
+  sudo_cmd bash "$tmp"
+  sudo_cmd apt-get install -y nodejs
+  node --version || true
+  npm --version || true
+  read -r -p "Press Enter to return..." _
+}
+
+install_omniroute() {
+  if ! have npm; then
+    ui_msg "npm is not available. Install Node.js 24 first."
+    return
+  fi
+  run_screen "Install/update OmniRoute" npm install -g omniroute@latest --include=optional
+}
+
+install_codex() {
+  if ! have npm; then
+    ui_msg "npm is not available. Install Node.js first."
+    return
+  fi
+  run_screen "Install/update Codex CLI" npm install -g @openai/codex@latest
+}
+
+install_claude() {
+  if ui_yesno "Install/update Claude Code using Anthropic's current native installer?
+
+The legacy npm installation is deprecated by Anthropic."; then
+    run_shell_screen "Install/update Claude Code" \
+      "curl -fsSL https://claude.ai/install.sh | bash"
+  fi
+}
+
+install_opencode() {
+  if ! have npm; then
+    ui_msg "npm is not available. Install Node.js first."
+    return
+  fi
+  run_screen "Install/update OpenCode" npm install -g opencode-ai@latest
+}
+
+install_gh() {
+  clear
+  echo "==== Install/update GitHub CLI ===="
+  set +e
+  sudo_cmd apt-get update
+  sudo_cmd apt-get install -y wget ca-certificates gnupg
+  sudo_cmd install -d -m 0755 /etc/apt/keyrings
+  local tmp
+  tmp="$(mktemp)"
+  wget -qO "$tmp" https://cli.github.com/packages/githubcli-archive-keyring.gpg
+  sudo_cmd install -m 0644 "$tmp" /etc/apt/keyrings/githubcli-archive-keyring.gpg
+  rm -f "$tmp"
+
+  local arch
+  arch="$(dpkg --print-architecture)"
+  local line="deb [arch=$arch signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main"
+  printf '%s\n' "$line" | sudo_cmd tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+  sudo_cmd apt-get update
+  sudo_cmd apt-get install -y gh
+  local rc=$?
+  set -e
+  echo
+  gh --version 2>/dev/null | head -n1 || true
+  echo "Exit code: $rc"
+  read -r -p "Press Enter to return..." _
+}
+
+install_robot() {
+  if ! have python3; then
+    ui_msg "Python 3 is not installed. Install the base packages first."
+    return
+  fi
+  mkdir -p "$HOME/.venvs"
+  if [[ ! -d "$HOME/.venvs/robot" ]]; then
+    python3 -m venv "$HOME/.venvs/robot"
+  fi
+  run_shell_screen "Install/update Robot Framework" \
+    "'$HOME/.venvs/robot/bin/python' -m pip install --upgrade pip robotframework"
+}
+
+install_all() {
+  install_base
+  install_node24
+  install_gh
+  install_omniroute
+  install_codex
+  install_claude
+  install_opencode
+  install_robot
+}
+
+status_text() {
+  local omniroute_http="DOWN"
+  if curl -fsS --max-time 2 "http://127.0.0.1:${OMNIROUTE_PORT}/v1/models" >/dev/null 2>&1; then
+    omniroute_http="UP"
+  elif curl -fsS --max-time 2 "http://127.0.0.1:${OMNIROUTE_PORT}/" >/dev/null 2>&1; then
+    omniroute_http="UP (dashboard)"
+  fi
+
+  local gh_auth="not authenticated"
+  if have gh && gh auth status >/dev/null 2>&1; then
+    gh_auth="authenticated"
+  fi
+
+  cat <<EOF
+Host:       $(hostname)
+User:       $(id -un)
+Projects:   $PROJECTS_DIR
+
+Git:        $(ver git --version)
+GitHub CLI: $(ver gh --version)
+GitHub:     $gh_auth
+Node:       $(ver node --version)
+npm:        $(ver npm --version)
+Python:     $(ver python3 --version)
+Robot:      $([[ -x "$HOME/.venvs/robot/bin/robot" ]] && "$HOME/.venvs/robot/bin/robot" --version 2>/dev/null || echo "not installed")
+OmniRoute:  $(ver omniroute --version)
+OmniRoute:  HTTP $omniroute_http on 127.0.0.1:$OMNIROUTE_PORT
+Codex:      $(ver codex --version)
+Claude:     $(ver claude --version)
+OpenCode:   $(ver opencode --version)
+
+TUI:        $APP_VERSION
+Log:        $LOG_FILE
+EOF
+}
+
+show_status() {
+  ui_msg "$(status_text)"
+}
+
+configure_omniroute_agents() {
+  if ! have omniroute; then
+    ui_msg "OmniRoute is not installed."
+    return
+  fi
+
+  local choice
+  choice="$(ui_menu "Configure coding tools to use OmniRoute" \
+    1 "Codex CLI — setup-codex" \
+    2 "Claude Code — setup-claude" \
+    3 "OpenCode — setup-opencode" \
+    4 "Configure all three" \
+    5 "Dry-run all three" \
+    6 "Set local OmniRoute API key for this TUI" \
+    7 "Connect to a remote OmniRoute host" \
+    0 "Back")" || return
+
+  case "$choice" in
+    1) run_screen "OmniRoute → Codex" omniroute setup-codex ;;
+    2) run_screen "OmniRoute → Claude" omniroute setup-claude ;;
+    3) run_screen "OmniRoute → OpenCode" omniroute setup-opencode ;;
+    4)
+      run_screen "OmniRoute → Codex" omniroute setup-codex || true
+      run_screen "OmniRoute → Claude" omniroute setup-claude || true
+      run_screen "OmniRoute → OpenCode" omniroute setup-opencode || true
+      ;;
+    5)
+      run_screen "Dry-run Codex" omniroute setup-codex --dry-run || true
+      run_screen "Dry-run Claude" omniroute setup-claude --dry-run || true
+      run_screen "Dry-run OpenCode" omniroute setup-opencode --dry-run || true
+      ;;
+    6)
+      local key
+      key="$(ui_password "Enter the OmniRoute endpoint API key.
+
+It will be stored in:
+$SECRETS_FILE
+with mode 600.
+
+Cancel to leave unchanged.")" || return
+      if [[ -n "$key" ]]; then
+        umask 077
+        printf 'export OMNIROUTE_API_KEY=%q\n' "$key" >"$SECRETS_FILE"
+        chmod 600 "$SECRETS_FILE"
+        export OMNIROUTE_API_KEY="$key"
+        ui_msg "OmniRoute API key saved for this user."
+      fi
+      ;;
+    7)
+      local host
+      host="$(ui_input "Remote OmniRoute host/IP or URL:" "192.168.0.15")" || return
+      [[ -z "$host" ]] && return
+      run_screen "Connect remote OmniRoute" omniroute connect "$host"
+      ;;
+  esac
+}
+
+omniroute_service_install() {
+  if ! have omniroute; then
+    ui_msg "OmniRoute is not installed."
+    return
+  fi
+  if ! have systemctl; then
+    ui_msg "systemd/systemctl is unavailable in this container."
+    return
+  fi
+
+  local or_bin node_dir npm_dir
+  or_bin="$(command -v omniroute)"
+  node_dir="$(dirname "$(command -v node)")"
+  npm_dir="$(dirname "$or_bin")"
+
+  mkdir -p "$HOME/.config/systemd/user"
+  cat >"$HOME/.config/systemd/user/omniroute.service" <<EOF
+[Unit]
+Description=OmniRoute AI model router
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=PATH=$node_dir:$npm_dir:/usr/local/bin:/usr/bin:/bin
+Environment=PORT=$OMNIROUTE_PORT
+ExecStart=$or_bin
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+EOF
+
+  systemctl --user daemon-reload
+  systemctl --user enable --now omniroute.service
+
+  if ui_yesno "Enable user lingering so OmniRoute can stay active when you log out?
+
+This needs root/sudo."; then
+    sudo_cmd loginctl enable-linger "$(id -un)" || true
+  fi
+  ui_msg "OmniRoute user service installed and started."
+}
+
+omniroute_menu() {
+  local choice
+  choice="$(ui_menu "OmniRoute service and diagnostics" \
+    1 "Start OmniRoute user service" \
+    2 "Stop OmniRoute user service" \
+    3 "Restart OmniRoute user service" \
+    4 "Service status" \
+    5 "Install/refresh user service" \
+    6 "Run OmniRoute in foreground" \
+    7 "Open health/API test" \
+    8 "Show recent service log" \
+    0 "Back")" || return
+
+  case "$choice" in
+    1) run_screen "Start OmniRoute" systemctl --user start omniroute.service ;;
+    2) run_screen "Stop OmniRoute" systemctl --user stop omniroute.service ;;
+    3) run_screen "Restart OmniRoute" systemctl --user restart omniroute.service ;;
+    4) run_screen "OmniRoute status" systemctl --user status --no-pager omniroute.service ;;
+    5) omniroute_service_install ;;
+    6) run_screen "OmniRoute foreground" omniroute ;;
+    7)
+      run_shell_screen "OmniRoute endpoint test" \
+        "curl -i --max-time 5 'http://127.0.0.1:${OMNIROUTE_PORT}/v1/models' -H 'Authorization: Bearer ${OMNIROUTE_API_KEY:-not-set}'"
+      ;;
+    8) run_screen "OmniRoute journal" journalctl --user -u omniroute.service -n 100 --no-pager ;;
+  esac
+}
+
+github_menu() {
+  if ! have gh; then
+    ui_msg "GitHub CLI is not installed."
+    return
+  fi
+
+  local choice
+  choice="$(ui_menu "GitHub CLI" \
+    1 "Authentication status" \
+    2 "Login to github.com" \
+    3 "Configure Git credential helper" \
+    4 "Clone a repository" \
+    5 "Repository status" \
+    6 "Pull-request status" \
+    7 "List workflow runs" \
+    8 "Create repository from current directory" \
+    0 "Back")" || return
+
+  case "$choice" in
+    1) run_screen "GitHub authentication" gh auth status ;;
+    2) run_screen "GitHub login" gh auth login --hostname github.com --git-protocol https ;;
+    3) run_screen "GitHub Git credential helper" gh auth setup-git ;;
+    4)
+      local repo dest
+      repo="$(ui_input "Repository, e.g. owner/repo or URL:")" || return
+      [[ -z "$repo" ]] && return
+      mkdir -p "$PROJECTS_DIR"
+      dest="$(ui_input "Destination directory (blank = GitHub CLI default):" "")" || return
+      if [[ -n "$dest" ]]; then
+        run_screen "Clone repository" gh repo clone "$repo" "$dest"
+      else
+        run_shell_screen "Clone repository" "cd $(printf '%q' "$PROJECTS_DIR") && gh repo clone $(printf '%q' "$repo")"
+      fi
+      ;;
+    5)
+      local dir
+      dir="$(select_project_dir)" || return
+      run_shell_screen "Repository status" "cd $(printf '%q' "$dir") && git status && echo && gh repo view"
+      ;;
+    6)
+      local dir
+      dir="$(select_project_dir)" || return
+      run_shell_screen "Pull request status" "cd $(printf '%q' "$dir") && gh pr status"
+      ;;
+    7)
+      local dir
+      dir="$(select_project_dir)" || return
+      run_shell_screen "GitHub Actions runs" "cd $(printf '%q' "$dir") && gh run list --limit 20"
+      ;;
+    8)
+      local dir name visibility
+      dir="$(select_project_dir)" || return
+      name="$(ui_input "New GitHub repository name:" "$(basename "$dir")")" || return
+      [[ -z "$name" ]] && return
+      visibility="$(ui_menu "Repository visibility" 1 "private" 2 "public" 0 "Cancel")" || return
+      case "$visibility" in
+        1) run_shell_screen "Create GitHub repository" "cd $(printf '%q' "$dir") && gh repo create $(printf '%q' "$name") --private --source=. --remote=origin --push" ;;
+        2) run_shell_screen "Create GitHub repository" "cd $(printf '%q' "$dir") && gh repo create $(printf '%q' "$name") --public --source=. --remote=origin --push" ;;
+      esac
+      ;;
+  esac
+}
+
+select_project_dir() {
+  mkdir -p "$PROJECTS_DIR"
+  local dir
+  dir="$(ui_input "Project directory:" "$PROJECTS_DIR")" || return 1
+  dir="${dir/#\~/$HOME}"
+  if [[ ! -d "$dir" ]]; then
+    if ui_yesno "Directory does not exist:
+
+$dir
+
+Create it?"; then
+      mkdir -p "$dir"
+    else
+      return 1
+    fi
+  fi
+  printf '%s' "$dir"
+}
+
+launch_agent() {
+  local dir choice
+  dir="$(select_project_dir)" || return
+  choice="$(ui_menu "Launch coding agent in:
+$dir" \
+    1 "Codex via OmniRoute" \
+    2 "Claude Code via OmniRoute" \
+    3 "OpenCode" \
+    4 "Codex direct" \
+    5 "Claude direct" \
+    6 "Shell only" \
+    0 "Back")" || return
+
+  clear
+  echo "Project: $dir"
+  echo
+
+  set +e
+  case "$choice" in
+    1) (cd "$dir" && omniroute launch-codex) ;;
+    2) (cd "$dir" && omniroute launch) ;;
+    3) (cd "$dir" && opencode) ;;
+    4) (cd "$dir" && codex) ;;
+    5) (cd "$dir" && claude) ;;
+    6) (cd "$dir" && "${SHELL:-/bin/bash}" -l) ;;
+  esac
+  local rc=$?
+  set -e
+  echo
+  echo "Agent/session exited with code: $rc"
+  read -r -p "Press Enter to return to the TUI..." _
+}
+
+settings_menu() {
+  local choice
+  choice="$(ui_menu "TUI settings" \
+    1 "Set projects directory" \
+    2 "Set OmniRoute port" \
+    3 "Remove locally stored OmniRoute API key" \
+    4 "Show configuration paths" \
+    0 "Back")" || return
+
+  case "$choice" in
+    1)
+      local d
+      d="$(ui_input "Projects directory:" "$PROJECTS_DIR")" || return
+      [[ -z "$d" ]] && return
+      d="${d/#\~/$HOME}"
+      PROJECTS_DIR="$d"
+      mkdir -p "$PROJECTS_DIR"
+      save_config
+      ;;
+    2)
+      local p
+      p="$(ui_input "OmniRoute port:" "$OMNIROUTE_PORT")" || return
+      [[ "$p" =~ ^[0-9]+$ ]] || { ui_msg "Port must be numeric."; return; }
+      OMNIROUTE_PORT="$p"
+      save_config
+      ;;
+    3)
+      rm -f "$SECRETS_FILE"
+      unset OMNIROUTE_API_KEY || true
+      ui_msg "Local OmniRoute API key removed."
+      ;;
+    4)
+      ui_msg "Config:  $CONFIG_FILE
+Secrets: $SECRETS_FILE
+Log:     $LOG_FILE
+Projects:$PROJECTS_DIR"
+      ;;
+  esac
+}
+
+install_menu() {
+  local choice
+  choice="$(ui_menu "Install / update tools" \
+    1 "Base development packages" \
+    2 "Node.js 24" \
+    3 "OmniRoute" \
+    4 "Codex CLI" \
+    5 "Claude Code" \
+    6 "OpenCode" \
+    7 "GitHub CLI" \
+    8 "Robot Framework isolated venv" \
+    9 "Install/update everything" \
+    0 "Back")" || return
+
+  case "$choice" in
+    1) install_base ;;
+    2) install_node24 ;;
+    3) install_omniroute ;;
+    4) install_codex ;;
+    5) install_claude ;;
+    6) install_opencode ;;
+    7) install_gh ;;
+    8) install_robot ;;
+    9) install_all ;;
+  esac
+}
+
+diagnostics() {
+  clear
+  echo "==== $APP_NAME diagnostics ===="
+  echo
+  status_text
+  echo
+  echo "---- Environment paths ----"
+  printf 'PATH=%s\n' "$PATH"
+  printf 'HOME=%s\n' "$HOME"
+  printf 'SHELL=%s\n' "${SHELL:-}"
+  echo
+  echo "---- OmniRoute ----"
+  if have omniroute; then
+    command -v omniroute
+    omniroute status 2>&1 || true
+  fi
+  echo
+  echo "---- GitHub ----"
+  if have gh; then
+    gh auth status 2>&1 || true
+  fi
+  echo
+  echo "---- Disk/memory ----"
+  df -h "$HOME" 2>/dev/null || true
+  free -h 2>/dev/null || true
+  echo
+  echo "---- Recent TUI log ----"
+  tail -n 60 "$LOG_FILE" 2>/dev/null || true
+  echo
+  read -r -p "Press Enter to return..." _
+}
+
+main() {
+  while true; do
+    local choice
+    choice="$(ui_menu "Unified headless AI development environment
+
+OmniRoute + Codex + Claude Code + OpenCode + GitHub CLI" \
+      1 "Status dashboard" \
+      2 "Install / update tools" \
+      3 "Configure OmniRoute integrations" \
+      4 "OmniRoute service / diagnostics" \
+      5 "Launch coding agent in a project" \
+      6 "GitHub CLI" \
+      7 "TUI settings" \
+      8 "Full diagnostics" \
+      0 "Exit")" || break
+
+    case "$choice" in
+      1) show_status ;;
+      2) install_menu ;;
+      3) configure_omniroute_agents ;;
+      4) omniroute_menu ;;
+      5) launch_agent ;;
+      6) github_menu ;;
+      7) settings_menu ;;
+      8) diagnostics ;;
+      0) break ;;
+    esac
+  done
+  clear
+}
+
+main "$@"
