@@ -62,9 +62,22 @@ Project repository
   `~/.config/ai-dev-tui/secrets.env` with mode `0600`.
   You may skip this and export `OMNIROUTE_API_KEY` yourself instead.
 - The TUI never stores a GitHub token itself.
+- **OmniRoute health/API test → Open health/API test** passes the API key
+  directly to `curl` as an argument rather than interpolating it into a
+  shell command string, so a key value can't be crafted to inject shell
+  commands.
 - User-level OmniRoute service configuration is written under
   `~/.config/systemd/user/omniroute.service`.
 - "Enable linger" is optional because it causes the user service to remain active after logout.
+
+## Error handling
+
+Individual install/setup steps (Node.js 24, the Robot Framework virtual
+environment, the OmniRoute user service) report failures on-screen and
+return you to the menu instead of exiting the whole TUI. If the OmniRoute
+user service fails to install — most commonly because no systemd user
+session exists in this container — use **OmniRoute service / diagnostics →
+Run OmniRoute in foreground** instead.
 
 ## GitHub CLI notes
 

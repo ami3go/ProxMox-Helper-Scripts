@@ -25,3 +25,14 @@ All launchers execute `helpers/ai-dev-lxc/install.sh`.
 ```
 
 See [`helpers/ai-dev-lxc/README.md`](helpers/ai-dev-lxc/README.md) for deployment, DNS, migration, security, and management-command details.
+
+## AI Dev OmniRoute TUI
+
+A companion helper for the LXC guest itself: a terminal UI to install and manage OmniRoute, Codex CLI, Claude Code, OpenCode, and the GitHub CLI, plus a project launcher and diagnostics.
+
+```bash
+./helpers/ai-dev-omniroute-tui/install.sh
+ai-dev-tui
+```
+
+See [`helpers/ai-dev-omniroute-tui/README.md`](helpers/ai-dev-omniroute-tui/README.md) for the full workflow, security choices, and compatibility notes.
