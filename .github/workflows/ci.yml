@@ -19,10 +19,10 @@ jobs:
       - name: Install validation tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes shellcheck zip
+          sudo apt-get install --yes shellcheck zip python3-pil python3-yaml
 
       - name: Validate repository
-        run: ./scripts/validate.sh
+        run: sudo -E ./scripts/validate.sh
 
       - name: Build release package
         run: ./scripts/package-release.sh

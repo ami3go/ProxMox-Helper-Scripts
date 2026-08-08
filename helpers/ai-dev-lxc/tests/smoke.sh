@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+# lib/common.sh's log()/ensure_runtime_dirs() default to real system paths
+# (/var/log/..., /var/backups/...) that require root. Redirect them to a
+# throwaway temp dir so smoke tests run unprivileged, e.g. in CI.
+runtime_tmp="$(mktemp -d)"
+trap 'rm -rf "$runtime_tmp"' EXIT
+export AI_DEV_LOG_DIR="$runtime_tmp/log"
+export AI_DEV_BACKUP_ROOT="$runtime_tmp/backups"
+
 for file in "$ROOT/install.sh" "$ROOT"/lib/*.sh "$ROOT"/tests/*.sh; do bash -n "$file"; done
 "$ROOT/tests/state-migration-test.sh"
 "$ROOT/tests/codex-cli-test.sh"
