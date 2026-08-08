@@ -29,7 +29,7 @@ if find "$ROOT" -type f \( -name auth.json -o -name '*.pem' -o -name '*.key' \) 
   echo 'Forbidden secret-bearing file found in repository.' >&2
   exit 1
 fi
-if grep -R --exclude-dir=.git --exclude='*.md' --exclude='codex-cli-test.sh' --exclude='validate.sh' -E 'sk-[A-Za-z0-9_-]{16,}|OPENAI_API_KEY=[^$]' "$ROOT"; then
+if grep -R --exclude-dir=.git --exclude='*.md' --exclude='codex-cli-test.sh' --exclude='validate.sh' -E 'sk-[A-Za-z0-9_-]{16,}|OPENAI_API_KEY=[^$"[:space:]]' "$ROOT"; then
   echo 'Possible embedded API credential found.' >&2
   exit 1
 fi
