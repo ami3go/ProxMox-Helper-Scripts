@@ -5,7 +5,7 @@ HELPER="$ROOT/helpers/ai-dev-lxc"
 
 "$HELPER/tests/smoke.sh"
 
-for file in "$ROOT"/*.sh "$ROOT"/scripts/*.sh "$HELPER"/install.sh "$HELPER"/lib/*.sh "$HELPER"/tests/*.sh; do
+for file in "$ROOT"/*.sh "$ROOT"/scripts/*.sh "$HELPER"/install.sh "$HELPER"/create-lxc-wizard.sh "$HELPER"/lib/*.sh "$HELPER"/tests/*.sh; do
   bash -n "$file"
 done
 

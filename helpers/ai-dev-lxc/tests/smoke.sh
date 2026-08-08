@@ -10,7 +10,7 @@ trap 'rm -rf "$runtime_tmp"' EXIT
 export AI_DEV_LOG_DIR="$runtime_tmp/log"
 export AI_DEV_BACKUP_ROOT="$runtime_tmp/backups"
 
-for file in "$ROOT/install.sh" "$ROOT"/lib/*.sh "$ROOT"/tests/*.sh; do bash -n "$file"; done
+for file in "$ROOT/install.sh" "$ROOT/create-lxc-wizard.sh" "$ROOT"/lib/*.sh "$ROOT"/tests/*.sh; do bash -n "$file"; done
 "$ROOT/tests/state-migration-test.sh"
 "$ROOT/tests/codex-cli-test.sh"
 "$ROOT/tests/homepage-config-test.sh"
