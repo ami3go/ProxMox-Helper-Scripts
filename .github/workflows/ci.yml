@@ -25,7 +25,7 @@ jobs:
         run: sudo -E ./scripts/validate.sh
 
       - name: Build release package
-        run: ./scripts/package-release.sh
+        run: OUT_DIR=dist sudo -E ./scripts/package-release.sh
 
       - name: Upload validation artifacts
         uses: actions/upload-artifact@v4

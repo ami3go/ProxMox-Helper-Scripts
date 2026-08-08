@@ -3,6 +3,7 @@ set -Eeuo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 VERSION=2.2.7
 OUT_DIR=${OUT_DIR:-$(dirname "$ROOT")}
+mkdir -p "$OUT_DIR"
 "$ROOT/scripts/build-standalone.sh"
 "$ROOT/scripts/validate.sh"
 
