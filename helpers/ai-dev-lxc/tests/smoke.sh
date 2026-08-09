@@ -10,7 +10,7 @@ trap 'rm -rf "$runtime_tmp"' EXIT
 export AI_DEV_LOG_DIR="$runtime_tmp/log"
 export AI_DEV_BACKUP_ROOT="$runtime_tmp/backups"
 
-for file in "$ROOT/install.sh" "$ROOT/create-lxc-wizard.sh" "$ROOT"/lib/*.sh "$ROOT"/tests/*.sh; do bash -n "$file"; done
+for file in "$ROOT/install.sh" "$ROOT/extend-existing-lxc.sh" "$ROOT"/lib/*.sh "$ROOT"/tests/*.sh; do bash -n "$file"; done
 "$ROOT/tests/state-migration-test.sh"
 "$ROOT/tests/codex-cli-test.sh"
 "$ROOT/tests/homepage-config-test.sh"
@@ -18,7 +18,7 @@ for file in "$ROOT/install.sh" "$ROOT/create-lxc-wizard.sh" "$ROOT"/lib/*.sh "$R
 "$ROOT/tests/binding-change-test.sh"
 "$ROOT/tests/rollback-test.sh"
 for required in \
-  manifest.env install.sh README.md \
+  manifest.env install.sh extend-existing-lxc.sh README.md \
   lib/caddy.sh lib/homepage.sh lib/codex.sh lib/bindings.sh lib/state.sh \
   templates/Caddyfile.tpl templates/homepage-compose.yaml.tpl templates/codex-config.toml.tpl \
   files/homepage/services.yaml files/homepage/settings.yaml files/homepage/widgets.yaml files/homepage/bookmarks.yaml files/homepage/docker.yaml; do

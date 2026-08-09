@@ -1,6 +1,6 @@
 # Proxmox Helper Scripts v2.2.7
 
-This release contains the AI Development LXC v2.2.7 gateway and Codex implementation. It is packaged as a modular helper and as standalone launcher scripts.
+This release contains the AI Development LXC v2.2.7 helper: an interactive Proxmox VE wizard that creates and provisions a headless LXC for AI-assisted development. It is packaged as a modular helper and as standalone launcher scripts.
 
 ## Entry points
 
@@ -10,7 +10,7 @@ sudo ./ai-dev-lxc-v2.2.7.sh
 sudo ./proxmox-ai-dev-lxc.sh
 ```
 
-All launchers execute `helpers/ai-dev-lxc/install.sh`.
+All launchers execute `helpers/ai-dev-lxc/install.sh`, which creates and provisions a new LXC. To extend or repair an LXC it already created — adding Codex CLI, Homepage, and Caddy — run `helpers/ai-dev-lxc/extend-existing-lxc.sh` directly.
 
 ## Validation
 

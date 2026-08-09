@@ -1,41 +1,73 @@
 # AI Development LXC helper v2.2.7
 
-This helper extends the v2.2.6 AI Development LXC service layout with:
+This helper is two separate tools that share a package:
 
-- **OpenAI Codex CLI** installed for the non-root development user.
-- **Homepage v1.13.2** as a Docker-based start page bound only to `127.0.0.1:3000`.
-- **Caddy** as the native systemd reverse proxy for Homepage, code-server, FileBrowser Quantum, and Termix.
-- Friendly `home.arpa` hostnames, DNS instructions, management commands, validation, backups, and automatic binding rollback.
+- **`install.sh`** — an interactive Proxmox VE wizard that creates a new, unprivileged Debian LXC from scratch and provisions it with selectable AI coding agents, code-server, FileBrowser Quantum, Termix, Python, and Robot Framework.
+- **`extend-existing-lxc.sh`** — adds Codex CLI (ChatGPT auth), Homepage, and a Caddy reverse proxy with friendly `home.arpa` hostnames to an LXC `install.sh` already created, and repairs/re-verifies that setup later.
 
-The helper preserves existing project files, application authentication, FileBrowser data, and the Termix `termix-data` volume.
+Run `install.sh` first to get a container. Run `extend-existing-lxc.sh` afterward (or repeatedly, to repair or reconfigure) if you want the gateway/dashboard layer on top of it.
 
-## Run from the Proxmox host
+## Create a new LXC
 
 ```bash
 sudo ./helpers/ai-dev-lxc/install.sh
 ```
 
+This is fully interactive (whiptail). The main menu offers:
+
+| Option | Purpose |
+|---|---|
+| Create a new LXC | Auto-selects the next free CTID, creates an unprivileged Debian container, and provisions it |
+| Update or repair a managed development LXC | Re-run provisioning against a container this helper created |
+| Adopt and repair an incomplete existing LXC | Bring an existing container under management |
+| Verify Web IDE, file manager, and Termix HTTP access | Health-check the running services |
+| Show access and status information | Print URLs/ports for a managed container |
+| Open a managed container console | `pct enter` a managed container |
+| Show this run's log file | View `/var/log/claude-dev-lxc` output |
+
+During creation you'll be asked for: hostname, development user, CPU/memory/swap/disk sizing, network (DHCP or static), storage/bridge selection, which AI coding agents to install (Claude, Codex, Gemini, Copilot, Aider, OpenCode), and an access mode:
+
+- **`lan`** — direct LXC IP access to code-server/FileBrowser/Termix, password-authenticated.
+- **`tunnel`** — services bind to loopback only inside the container; connect over an SSH tunnel.
+
+Default ports: code-server `8080`, FileBrowser Quantum `8081`, Termix `8082`.
+
+`sudo ./install.sh --version` prints the helper version and exits without requiring a Proxmox host.
+
+## Extend an existing LXC with the gateway
+
+```bash
+sudo ./helpers/ai-dev-lxc/extend-existing-lxc.sh
+```
+
 Or select the container without the menu:
 
 ```bash
-sudo ./helpers/ai-dev-lxc/install.sh --ctid 123
+sudo ./helpers/ai-dev-lxc/extend-existing-lxc.sh --ctid 123
 ```
 
-The target must already be an AI Development LXC created by the v2.2.x base helper. The script starts the LXC when necessary, detects existing services, transfers its modular payload, runs provisioning inside the guest, updates the existing managed state, and validates the routes from the Proxmox node.
+The target must already be an AI Development LXC created by `install.sh`. The script starts the LXC when necessary, detects existing services, transfers its modular payload, runs provisioning inside the guest, updates the existing managed state, and validates the routes from the Proxmox node. It preserves existing project files, application authentication, FileBrowser data, and the Termix `termix-data` volume.
 
-## Run inside the LXC
+Run inside the LXC directly instead of from the host:
 
 ```bash
-sudo ./install.sh --guest
+sudo ./extend-existing-lxc.sh --guest
 ```
 
 For unattended repair using `/etc/ai-development-gateway.env`:
 
 ```bash
-sudo ./install.sh --guest --non-interactive
+sudo ./extend-existing-lxc.sh --guest --non-interactive
 ```
 
-## Default URLs
+Adds:
+
+- **OpenAI Codex CLI** installed for the non-root development user, authenticated via ChatGPT sign-in by default.
+- **Homepage v1.13.2** as a Docker-based start page bound only to `127.0.0.1:3000`.
+- **Caddy** as the native systemd reverse proxy for Homepage, code-server, FileBrowser Quantum, and Termix.
+- Friendly `home.arpa` hostnames, DNS instructions, management commands, validation, backups, and automatic binding rollback.
+
+### Default URLs
 
 ```text
 http://ai-dev.home.arpa
@@ -52,7 +84,7 @@ gateway-dns-records
 
 > The preferred wildcard record `*.ai-dev.home.arpa` covers the default service names. The dashboard itself still needs the explicit `ai-dev.home.arpa` record.
 
-## Management commands
+### Management commands
 
 | Command | Purpose |
 |---|---|
@@ -69,7 +101,7 @@ gateway-dns-records
 | `codex-logout` | Remove the active Codex credentials |
 | `sudo codex-update` | Re-run the official installer without archiving credentials |
 
-## Codex authentication
+### Codex authentication
 
 The default is ChatGPT account authentication:
 
@@ -81,21 +113,21 @@ This runs `codex login --device-auth` as the configured development user. No Ope
 
 `~/.codex/auth.json` is treated as a password-equivalent secret. It is excluded from helper backups, diagnostics, tests, and release packages. Credential storage defaults to `auto`, allowing an available OS keyring and otherwise using the protected file cache.
 
-## Local DNS examples
+### Local DNS examples
 
-### Router local DNS
+#### Router local DNS
 
 Create one A/host record per line printed by `gateway-dns-records`, all pointing to the LXC IPv4 address.
 
-### AdGuard Home
+#### AdGuard Home
 
 Open **Filters → DNS rewrites**, create the dashboard and service records, then flush the client DNS cache.
 
-### Pi-hole
+#### Pi-hole
 
 Open **Local DNS → DNS Records** and add each hostname with the LXC IPv4 address.
 
-### Windows hosts file
+#### Windows hosts file
 
 Edit as Administrator:
 
@@ -115,20 +147,20 @@ Then run:
 ipconfig /flushdns
 ```
 
-### Linux hosts file
+#### Linux hosts file
 
 Add the same line to `/etc/hosts`, then restart the local resolver or browser if it caches DNS.
 
-## HTTP and internal HTTPS
+### HTTP and internal HTTPS
 
 - **HTTP mode** is intended for a trusted private LAN and disables Caddy automatic HTTPS explicitly.
 - **Internal HTTPS mode** adds `tls internal` to every generated site. Client devices must trust Caddy's local root certificate.
 
 Caddy is installed natively from the official Debian repository and runs under the packaged `caddy.service` account. Homepage remains inside Docker.
 
-Homepage’s built-in resource widget reports the Homepage container CPU/memory context. The helper mounts `/srv/workspace` read-only so its disk usage is visible; use a separate host metrics provider such as Glances when full LXC host metrics are required.
+Homepage's built-in resource widget reports the Homepage container CPU/memory context. The helper mounts `/srv/workspace` read-only so its disk usage is visible; use a separate host metrics provider such as Glances when full LXC host metrics are required.
 
-## Backend restriction and rollback
+### Backend restriction and rollback
 
 When enabled, restriction occurs only after all proxy routes pass:
 
@@ -142,7 +174,7 @@ When enabled, restriction occurs only after all proxy routes pass:
 
 Caddy and Homepage also back up their own configurations before replacement or update.
 
-## Adding another service
+### Adding another service
 
 1. Add state fields for the enable flag, hostname, and backend port.
 2. Add a conditional tile in `homepage_render_services()`.
@@ -155,6 +187,6 @@ Caddy and Homepage also back up their own configurations before replacement or u
 - Homepage is bound to loopback and is not an authentication layer.
 - Docker socket discovery is off by default and requires an explicit warning/selection.
 - Existing authentication remains enabled for code-server, FileBrowser, and Termix.
-- The helper does not configure router port forwarding or public internet exposure.
+- Neither script configures router port forwarding or public internet exposure.
 - Use a VPN or authenticated edge proxy before remote access.
 - Enable MFA on the ChatGPT account used for Codex.
