@@ -28,10 +28,11 @@ See [`helpers/ai-dev-lxc/README.md`](helpers/ai-dev-lxc/README.md) for deploymen
 
 ## AI Dev OmniRoute TUI
 
-A companion helper for the LXC guest itself: a terminal UI to install and manage OmniRoute, Codex CLI, Claude Code, OpenCode, and the GitHub CLI, plus a project launcher and diagnostics.
+A terminal UI to install and manage OmniRoute, Codex CLI, Claude Code, OpenCode, and the GitHub CLI, plus a project launcher and diagnostics. Run from a Proxmox host to create a new LXC and install into it, or run `--guest` inside a container/VM you already have:
 
 ```bash
-./helpers/ai-dev-omniroute-tui/install.sh
+sudo ./helpers/ai-dev-omniroute-tui/install.sh          # creates a new LXC on a Proxmox host
+./helpers/ai-dev-omniroute-tui/install.sh --guest        # installs locally inside an existing container/VM
 ai-dev-tui
 ```
 

@@ -19,13 +19,37 @@ A terminal UI for a headless Debian/Ubuntu/Proxmox-LXC software-development envi
 
 ## Install
 
+### From a Proxmox VE host (creates a new LXC)
+
+```bash
+sudo ./install.sh
+```
+
+With no `--guest` flag, on a host with `pct` and `/etc/pve` present, `install.sh`
+creates a new unprivileged Debian LXC (auto-allocated CTID, DHCP networking,
+2 cores / 2048 MB RAM / 512 MB swap / 8 GB disk), adds a non-root `dev` user
+with passwordless sudo, pushes this helper into the container, and installs
+the TUI there for that user — printing console/SSH access instructions when
+done.
+
+```bash
+sudo ./install.sh --ctid 121        # use/create a specific CTID
+sudo ./install.sh --user alice      # different in-container username
+sudo ./install.sh --yes             # skip the confirmation prompt
+```
+
+### Inside an existing container or VM
+
 ```bash
 chmod +x install.sh
-./install.sh
+./install.sh --guest
 ai-dev-tui
 ```
 
-You can also run directly:
+`--guest` is implied automatically when `pct`/`/etc/pve` aren't present, so
+running `./install.sh` directly inside a container or VM works the same way.
+
+You can also run the TUI directly without installing it system-wide:
 
 ```bash
 ./ai-dev-tui
