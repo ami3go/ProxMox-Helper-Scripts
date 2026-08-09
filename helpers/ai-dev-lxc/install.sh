@@ -2912,9 +2912,9 @@ This includes package upgrades, code-server, FileBrowser Quantum, Termix, select
 
   if ((rc == 20)); then
     PROVISION_WARNING=$(pct exec "$CTID" -- bash -lc       'printf "The environment is operational, but these selected AI agents failed to install: "; paste -sd", " /var/log/ai-agent-install-failures 2>/dev/null || true'       2>/dev/null || true)
-    pct exec "$CTID" -- bash -lc 'p=$(cat /run/ai-dev-provision.log-path 2>/dev/null || readlink -f /var/log/claude-dev-provision.log 2>/dev/null || true); printf \"=== Current LXC provision log: %s ===\\n\" \"${p:-unavailable}\"; [[ -n $p && -f $p ]] && tail -n 120 \"$p\"' >>"$LOG_FILE" 2>&1 || true
+    pct exec "$CTID" -- bash -lc 'p=$(cat /run/ai-dev-provision.log-path 2>/dev/null || readlink -f /var/log/claude-dev-provision.log 2>/dev/null || true); printf "=== Current LXC provision log: %s ===\n" "${p:-unavailable}"; [[ -n $p && -f $p ]] && tail -n 120 "$p"' >>"$LOG_FILE" 2>&1 || true
   elif ((rc != 0)); then
-    pct exec "$CTID" -- bash -lc 'p=$(cat /run/ai-dev-provision.log-path 2>/dev/null || readlink -f /var/log/claude-dev-provision.log 2>/dev/null || true); printf \"=== Current LXC provision log: %s ===\\n\" \"${p:-unavailable}\"; [[ -n $p && -f $p ]] && tail -n 160 \"$p\"' >>"$LOG_FILE" 2>&1 || true
+    pct exec "$CTID" -- bash -lc 'p=$(cat /run/ai-dev-provision.log-path 2>/dev/null || readlink -f /var/log/claude-dev-provision.log 2>/dev/null || true); printf "=== Current LXC provision log: %s ===\n" "${p:-unavailable}"; [[ -n $p && -f $p ]] && tail -n 160 "$p"' >>"$LOG_FILE" 2>&1 || true
     if ((rc == 124)); then
       show_error_details "Provisioning run $PROVISION_RUN_ID inside LXC $CTID exceeded the 90-minute watchdog. The container was left intact. Review the final displayed stage and logs before retrying."
     else
