@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="AI Dev OmniRoute TUI"
-APP_VERSION="0.1.1"
+APP_VERSION="0.1.2"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ai-dev-tui"
 CONFIG_FILE="$CONFIG_DIR/config.env"
 SECRETS_FILE="$CONFIG_DIR/secrets.env"
@@ -217,8 +217,10 @@ install_omniroute() {
   # Keep the reviewed OmniRoute/native dependency list explicit, and fail
   # instead of silently accepting a partially-built installation if a future
   # OmniRoute release adds another package with an install script.
+  # fsevents is macOS-only, but npm 11.17 may still include its inert optional
+  # install script in strict allow-script validation on Linux.
   local allow_scripts
-  allow_scripts="omniroute,keytar,tls-client-node,onnxruntime-node,sharp,core-js,@parcel/watcher,@swc/core,protobufjs,koffi,esbuild"
+  allow_scripts="omniroute,keytar,tls-client-node,onnxruntime-node,sharp,core-js,@parcel/watcher,@swc/core,protobufjs,koffi,esbuild,fsevents"
 
   run_screen "Install/update OmniRoute" \
     npm install -g omniroute@latest --include=optional \

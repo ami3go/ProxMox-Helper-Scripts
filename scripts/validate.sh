@@ -20,6 +20,7 @@ grep -q 'caddy validate --config /etc/caddy/Caddyfile' "$HELPER/lib/caddy.sh"
 grep -q 'bindings_restore' "$HELPER/lib/bindings.sh"
 grep -q -- '--strict-allow-scripts' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q -- '--allow-scripts=' "$OMNIROUTE_TUI/ai-dev-tui"
+grep -q 'allow_scripts=.*fsevents' "$OMNIROUTE_TUI/ai-dev-tui"
 
 python3 - "$ROOT/helper-catalog.json" <<'PY'
 import json,sys
