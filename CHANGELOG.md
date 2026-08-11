@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.2 — 2026-08-11 — AI Dev OmniRoute TUI
+
+### Fixed
+
+- Removed the Node.js installer `RETURN` trap that referenced a function-local temporary-file variable and could terminate the TUI with `tmp: unbound variable` under `set -u` after Node installation.
+- NodeSource temporary-file cleanup now occurs explicitly while the variable remains in scope.
+- Failed NodeSource download/setup steps no longer continue into the Node.js package-install step.
+
 ## v2.2.7 — 2026-08-04
 
 ### Added
