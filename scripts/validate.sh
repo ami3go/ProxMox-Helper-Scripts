@@ -2,10 +2,11 @@
 set -Eeuo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 HELPER="$ROOT/helpers/ai-dev-lxc"
+OMNIROUTE_TUI="$ROOT/helpers/ai-dev-omniroute-tui"
 
 "$HELPER/tests/smoke.sh"
 
-for file in "$ROOT"/*.sh "$ROOT"/scripts/*.sh "$HELPER"/install.sh "$HELPER"/extend-existing-lxc.sh "$HELPER"/lib/*.sh "$HELPER"/tests/*.sh; do
+for file in "$ROOT"/*.sh "$ROOT"/scripts/*.sh "$HELPER"/install.sh "$HELPER"/extend-existing-lxc.sh "$HELPER"/lib/*.sh "$HELPER"/tests/*.sh "$OMNIROUTE_TUI"/install.sh "$OMNIROUTE_TUI"/ai-dev-tui; do
   bash -n "$file"
 done
 
@@ -17,6 +18,8 @@ grep -q '127.0.0.1:${HOMEPAGE_PORT}:3000' "$HELPER/lib/homepage.sh"
 grep -q 'forced_login_method' "$HELPER/lib/codex.sh"
 grep -q 'caddy validate --config /etc/caddy/Caddyfile' "$HELPER/lib/caddy.sh"
 grep -q 'bindings_restore' "$HELPER/lib/bindings.sh"
+grep -q -- '--strict-allow-scripts' "$OMNIROUTE_TUI/ai-dev-tui"
+grep -q -- '--allow-scripts=' "$OMNIROUTE_TUI/ai-dev-tui"
 
 python3 - "$ROOT/helper-catalog.json" <<'PY'
 import json,sys
