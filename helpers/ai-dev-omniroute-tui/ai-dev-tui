@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="AI Dev OmniRoute TUI"
-APP_VERSION="0.1.2"
+APP_VERSION="0.1.3"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ai-dev-tui"
 CONFIG_FILE="$CONFIG_DIR/config.env"
 SECRETS_FILE="$CONFIG_DIR/secrets.env"
@@ -187,7 +187,6 @@ This is the recommended runtime line for OmniRoute."; then
   echo "==== Install Node.js 24 ===="
   local tmp
   tmp="$(mktemp)"
-  trap 'rm -f "$tmp"' RETURN
   set +e
   curl -fsSL https://deb.nodesource.com/setup_24.x -o "$tmp"
   local rc1=$?
@@ -195,6 +194,7 @@ This is the recommended runtime line for OmniRoute."; then
   local rc2=$?
   sudo_cmd apt-get install -y nodejs
   local rc3=$?
+  rm -f "$tmp"
   set -e
   echo
   if [[ $rc1 -eq 0 && $rc2 -eq 0 && $rc3 -eq 0 ]]; then
