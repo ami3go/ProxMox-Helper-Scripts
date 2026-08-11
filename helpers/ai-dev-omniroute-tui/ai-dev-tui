@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="AI Dev OmniRoute TUI"
-APP_VERSION="0.1.1"
+APP_VERSION="0.1.2"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ai-dev-tui"
 CONFIG_FILE="$CONFIG_DIR/config.env"
 SECRETS_FILE="$CONFIG_DIR/secrets.env"
@@ -177,9 +177,7 @@ install_node24() {
     fi
   fi
 
-  if ! ui_yesno "Install Node.js 24.x from the NodeSource Debian/Ubuntu repository?
-
-This is the recommended runtime line for OmniRoute."; then
+  if ! ui_yesno "Install Node.js 24.x from the NodeSource Debian/Ubuntu repository?\n\nThis is the recommended runtime line for OmniRoute."; then
     return
   fi
 
@@ -217,8 +215,10 @@ install_omniroute() {
   # Keep the reviewed OmniRoute/native dependency list explicit, and fail
   # instead of silently accepting a partially-built installation if a future
   # OmniRoute release adds another package with an install script.
+  # fsevents is macOS-only, but npm 11.17 may still include its inert optional
+  # install script in strict allow-script validation on Linux.
   local allow_scripts
-  allow_scripts="omniroute,keytar,tls-client-node,onnxruntime-node,sharp,core-js,@parcel/watcher,@swc/core,protobufjs,koffi,esbuild"
+  allow_scripts="omniroute,keytar,tls-client-node,onnxruntime-node,sharp,core-js,@parcel/watcher,@swc/core,protobufjs,koffi,esbuild,fsevents"
 
   run_screen "Install/update OmniRoute" \
     npm install -g omniroute@latest --include=optional \
@@ -234,9 +234,7 @@ install_codex() {
 }
 
 install_claude() {
-  if ui_yesno "Install/update Claude Code using Anthropic's current native installer?
-
-The legacy npm installation is deprecated by Anthropic."; then
+  if ui_yesno "Install/update Claude Code using Anthropic's current native installer?\n\nThe legacy npm installation is deprecated by Anthropic."; then
     run_shell_screen "Install/update Claude Code" \
       "curl -fsSL https://claude.ai/install.sh | bash"
   fi
@@ -289,9 +287,7 @@ install_robot() {
     local rc=$?
     set -e
     if [[ $rc -ne 0 ]]; then
-      ui_msg "Failed to create the Robot Framework virtual environment.
-
-Ensure python3-venv is installed (Install base packages first)."
+      ui_msg "Failed to create the Robot Framework virtual environment.\n\nEnsure python3-venv is installed (Install base packages first)."
       return
     fi
   fi
@@ -383,13 +379,7 @@ configure_omniroute_agents() {
       ;;
     6)
       local key
-      key="$(ui_password "Enter the OmniRoute endpoint API key.
-
-It will be stored in:
-$SECRETS_FILE
-with mode 600.
-
-Cancel to leave unchanged.")" || return
+      key="$(ui_password "Enter the OmniRoute endpoint API key.\n\nIt will be stored in:\n$SECRETS_FILE\nwith mode 600.\n\nCancel to leave unchanged.")" || return
       if [[ -n "$key" ]]; then
         printf 'export OMNIROUTE_API_KEY=%q\n' "$key" >"$SECRETS_FILE"
         chmod 600 "$SECRETS_FILE"
@@ -451,15 +441,11 @@ EOF
   local rc2=$?
   set -e
   if [[ $rc1 -ne 0 || $rc2 -ne 0 ]]; then
-    ui_msg "Failed to enable the OmniRoute user service.
-
-This usually means no systemd --user session is available in this container. Use 'Run OmniRoute in foreground' instead."
+    ui_msg "Failed to enable the OmniRoute user service.\n\nThis usually means no systemd --user session is available in this container. Use 'Run OmniRoute in foreground' instead."
     return
   fi
 
-  if ui_yesno "Enable user lingering so OmniRoute can stay active when you log out?
-
-This needs root/sudo."; then
+  if ui_yesno "Enable user lingering so OmniRoute can stay active when you log out?\n\nThis needs root/sudo."; then
     sudo_cmd loginctl enable-linger "$(id -un)" || true
   fi
   ui_msg "OmniRoute user service installed and started."
@@ -563,15 +549,9 @@ select_project_dir() {
   dir="$(ui_input "Project directory:" "$PROJECTS_DIR")" || return 1
   dir="${dir/#\~/$HOME}"
   if [[ ! -d "$dir" ]]; then
-    if ui_yesno "Directory does not exist:
-
-$dir
-
-Create it?"; then
+    if ui_yesno "Directory does not exist:\n\n$dir\n\nCreate it?"; then
       if ! mkdir -p "$dir" 2>/dev/null; then
-        ui_msg "Failed to create directory:
-
-$dir"
+        ui_msg "Failed to create directory:\n\n$dir"
         return 1
       fi
     else
@@ -584,8 +564,7 @@ $dir"
 launch_agent() {
   local dir choice
   dir="$(select_project_dir)" || return
-  choice="$(ui_menu "Launch coding agent in:
-$dir" \
+  choice="$(ui_menu "Launch coding agent in:\n$dir" \
     1 "Codex via OmniRoute" \
     2 "Claude Code via OmniRoute" \
     3 "OpenCode" \
@@ -646,10 +625,7 @@ settings_menu() {
       ui_msg "Local OmniRoute API key removed."
       ;;
     4)
-      ui_msg "Config:  $CONFIG_FILE
-Secrets: $SECRETS_FILE
-Log:     $LOG_FILE
-Projects:$PROJECTS_DIR"
+      ui_msg "Config:  $CONFIG_FILE\nSecrets: $SECRETS_FILE\nLog:     $LOG_FILE\nProjects:$PROJECTS_DIR"
       ;;
   esac
 }
@@ -716,9 +692,7 @@ diagnostics() {
 main() {
   while true; do
     local choice
-    choice="$(ui_menu "Unified headless AI development environment
-
-OmniRoute + Codex + Claude Code + OpenCode + GitHub CLI" \
+    choice="$(ui_menu "Unified headless AI development environment\n\nOmniRoute + Codex + Claude Code + OpenCode + GitHub CLI" \
       1 "Status dashboard" \
       2 "Install / update tools" \
       3 "Configure OmniRoute integrations" \
