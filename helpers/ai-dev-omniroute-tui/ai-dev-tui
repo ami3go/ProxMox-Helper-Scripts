@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="AI Dev OmniRoute TUI"
-APP_VERSION="0.1.0"
+APP_VERSION="0.1.1"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ai-dev-tui"
 CONFIG_FILE="$CONFIG_DIR/config.env"
 SECRETS_FILE="$CONFIG_DIR/secrets.env"
@@ -212,7 +212,17 @@ install_omniroute() {
     ui_msg "npm is not available. Install Node.js 24 first."
     return
   fi
-  run_screen "Install/update OmniRoute" npm install -g omniroute@latest --include=optional
+
+  # npm's global install-script policy blocks unapproved lifecycle scripts.
+  # Keep the reviewed OmniRoute/native dependency list explicit, and fail
+  # instead of silently accepting a partially-built installation if a future
+  # OmniRoute release adds another package with an install script.
+  local allow_scripts
+  allow_scripts="omniroute,keytar,tls-client-node,onnxruntime-node,sharp,core-js,@parcel/watcher,@swc/core,protobufjs,koffi,esbuild"
+
+  run_screen "Install/update OmniRoute" \
+    npm install -g omniroute@latest --include=optional \
+    "--allow-scripts=$allow_scripts" --strict-allow-scripts
 }
 
 install_codex() {
