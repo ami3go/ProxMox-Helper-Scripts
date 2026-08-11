@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="AI Dev OmniRoute TUI"
-APP_VERSION="0.1.1"
+APP_VERSION="0.1.2"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ai-dev-tui"
 CONFIG_FILE="$CONFIG_DIR/config.env"
 SECRETS_FILE="$CONFIG_DIR/secrets.env"
@@ -185,25 +185,44 @@ This is the recommended runtime line for OmniRoute."; then
 
   clear
   echo "==== Install Node.js 24 ===="
-  local tmp
-  tmp="$(mktemp)"
-  trap 'rm -f "$tmp"' RETURN
+  local tmp rc1 rc2 rc3
+  tmp="$(mktemp)" || {
+    ui_msg "Failed to create a temporary file for the NodeSource setup script."
+    return
+  }
+
+  # Keep cleanup inside this function. A RETURN trap that references a local
+  # variable can run after that variable leaves scope under `set -u`, causing
+  # the TUI to terminate with "tmp: unbound variable" when this function exits.
   set +e
   curl -fsSL https://deb.nodesource.com/setup_24.x -o "$tmp"
-  local rc1=$?
-  sudo_cmd bash "$tmp"
-  local rc2=$?
-  sudo_cmd apt-get install -y nodejs
-  local rc3=$?
+  rc1=$?
+
+  if [[ $rc1 -eq 0 ]]; then
+    sudo_cmd bash "$tmp"
+    rc2=$?
+  else
+    rc2=1
+  fi
+
+  rm -f -- "$tmp"
+
+  if [[ $rc1 -eq 0 && $rc2 -eq 0 ]]; then
+    sudo_cmd apt-get install -y nodejs
+    rc3=$?
+  else
+    rc3=1
+  fi
   set -e
+
   echo
   if [[ $rc1 -eq 0 && $rc2 -eq 0 && $rc3 -eq 0 ]]; then
     echo "Node.js 24 installed."
   else
     echo "Node.js installation returned an error."
   fi
-  node --version || true
-  npm --version || true
+  node --version 2>/dev/null || true
+  npm --version 2>/dev/null || true
   read -r -p "Press Enter to return..." _
 }
 
