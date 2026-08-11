@@ -103,6 +103,10 @@ user service fails to install — most commonly because no systemd user
 session exists in this container — use **OmniRoute service / diagnostics →
 Run OmniRoute in foreground** instead.
 
+The Node.js 24 installer cleans up its temporary NodeSource setup file inside
+the installer function itself. This avoids a Bash `RETURN` trap referencing a
+function-local variable after it has gone out of scope when `set -u` is active.
+
 ## GitHub CLI notes
 
 After login:
@@ -153,4 +157,4 @@ separate supervisor/container deployment.
 
 ## Version
 
-Initial TUI package: `0.1.0`.
+Current TUI package: `0.1.2`.
