@@ -18,9 +18,14 @@ grep -q '127.0.0.1:${HOMEPAGE_PORT}:3000' "$HELPER/lib/homepage.sh"
 grep -q 'forced_login_method' "$HELPER/lib/codex.sh"
 grep -q 'caddy validate --config /etc/caddy/Caddyfile' "$HELPER/lib/caddy.sh"
 grep -q 'bindings_restore' "$HELPER/lib/bindings.sh"
+grep -q 'APP_VERSION="0.1.3"' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q -- '--strict-allow-scripts' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q -- '--allow-scripts=' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q 'allow_scripts=.*fsevents' "$OMNIROUTE_TUI/ai-dev-tui"
+if grep -Eq '^[[:space:]]*trap .* RETURN([[:space:]]|$)' "$OMNIROUTE_TUI/ai-dev-tui"; then
+  echo 'Persistent RETURN trap found in OmniRoute TUI.' >&2
+  exit 1
+fi
 
 python3 - "$ROOT/helper-catalog.json" <<'PY'
 import json,sys
