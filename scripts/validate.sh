@@ -3,12 +3,40 @@ set -Eeuo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 HELPER="$ROOT/helpers/ai-dev-lxc"
 OMNIROUTE_TUI="$ROOT/helpers/ai-dev-omniroute-tui"
+TELEMETRY="$ROOT/helpers/internet-telemetry"
 
 "$HELPER/tests/smoke.sh"
 
-for file in "$ROOT"/*.sh "$ROOT"/scripts/*.sh "$HELPER"/install.sh "$HELPER"/extend-existing-lxc.sh "$HELPER"/lib/*.sh "$HELPER"/tests/*.sh "$OMNIROUTE_TUI"/install.sh "$OMNIROUTE_TUI"/ai-dev-tui; do
+# Discover every shell script in the repository instead of maintaining a
+# fragile hand-written list. This includes extensionless entrypoints such as
+# bin/proxmox-helper-scripts and helpers/ai-dev-omniroute-tui/ai-dev-tui.
+shell_files=()
+while IFS= read -r -d '' file; do
+  if [[ "$file" == *.sh ]] || head -n 1 "$file" 2>/dev/null | grep -Eq '^#!.*(bash|sh)([[:space:]]|$)'; then
+    shell_files+=("$file")
+  fi
+done < <(find "$ROOT" -type f \
+  -not -path "$ROOT/.git/*" \
+  -not -path "$ROOT/dist/*" \
+  -print0)
+
+((${#shell_files[@]} > 0)) || { echo 'No shell scripts discovered.' >&2; exit 1; }
+
+for file in "${shell_files[@]}"; do
   bash -n "$file"
 done
+
+# shellcheck is installed by CI. Keep warning-level findings fatal so scope,
+# quoting, error-path, and trap mistakes are caught before provisioning runs.
+shellcheck --severity=warning -x "${shell_files[@]}"
+
+# RETURN traps persist beyond the function that creates them. Referencing a
+# local variable from one is unsafe under `set -u` and caused the Node.js TUI
+# crash fixed in v0.1.3. Disallow this construct repository-wide.
+if grep -nHE '^[[:space:]]*trap .* RETURN([[:space:]]|$)' "${shell_files[@]}"; then
+  echo 'Persistent RETURN trap found in shell script.' >&2
+  exit 1
+fi
 
 grep -q 'HELPER_VERSION="2.2.7"' "$HELPER/manifest.env"
 grep -q 'AI_DEV_VERSION="${AI_DEV_VERSION:-2.2.7}"' "$HELPER/lib/common.sh"
@@ -22,10 +50,25 @@ grep -q 'APP_VERSION="0.1.3"' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q -- '--strict-allow-scripts' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q -- '--allow-scripts=' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q 'allow_scripts=.*fsevents' "$OMNIROUTE_TUI/ai-dev-tui"
-if grep -Eq '^[[:space:]]*trap .* RETURN([[:space:]]|$)' "$OMNIROUTE_TUI/ai-dev-tui"; then
-  echo 'Persistent RETURN trap found in OmniRoute TUI.' >&2
-  exit 1
-fi
+
+python3 "$ROOT/scripts/validate-manifests.py"
+
+# Syntax-check every Python source without leaving __pycache__ artifacts in the
+# checkout. This covers repository tooling and the Internet Telemetry helper.
+python3 - "$ROOT" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+for path in sorted(root.rglob('*.py')):
+    if '.git' in path.parts or 'dist' in path.parts:
+        continue
+    compile(path.read_text(encoding='utf-8'), str(path), 'exec')
+    print(f'PY  {path.relative_to(root)}')
+PY
+
+# Run the telemetry helper's standard-library-only logic regression suite.
+python3 "$TELEMETRY/test_logic.py"
 
 python3 - "$ROOT/helper-catalog.json" <<'PY'
 import json,sys
