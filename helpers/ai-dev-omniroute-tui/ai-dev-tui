@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 APP_NAME="AI Dev OmniRoute TUI"
-APP_VERSION="0.1.3"
+APP_VERSION="0.1.4"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/ai-dev-tui"
 CONFIG_FILE="$CONFIG_DIR/config.env"
 SECRETS_FILE="$CONFIG_DIR/secrets.env"
@@ -222,9 +222,84 @@ install_omniroute() {
   local allow_scripts
   allow_scripts="omniroute,keytar,tls-client-node,onnxruntime-node,sharp,core-js,@parcel/watcher,@swc/core,protobufjs,koffi,esbuild,fsevents"
 
-  run_screen "Install/update OmniRoute" \
-    npm install -g omniroute@latest --include=optional \
-    "--allow-scripts=$allow_scripts" --strict-allow-scripts
+  clear
+  echo "==== Install/update OmniRoute ===="
+  echo
+  echo "Installing OmniRoute with npm..."
+  echo "Full npm output, including upstream dependency warnings, is saved to:"
+  echo "  $LOG_FILE"
+  echo
+  log "RUN: npm install -g omniroute@latest --include=optional --allow-scripts=$allow_scripts --strict-allow-scripts"
+
+  local npm_output
+  npm_output="$(mktemp)"
+
+  set +e
+  npm install -g omniroute@latest --include=optional \
+    "--allow-scripts=$allow_scripts" --strict-allow-scripts >"$npm_output" 2>&1
+  local npm_rc=$?
+  set -e
+
+  cat "$npm_output" >>"$LOG_FILE"
+
+  local peer_warning_count deprecated_warning_count install_summary
+  peer_warning_count="$(grep -c '^npm warn ERESOLVE' "$npm_output" || true)"
+  deprecated_warning_count="$(grep -c '^npm warn deprecated ' "$npm_output" || true)"
+  install_summary="$(grep -E '^(added|changed|removed|up to date)( |$)' "$npm_output" | tail -n1 || true)"
+
+  if [[ -n "$install_summary" ]]; then
+    echo "$install_summary"
+    echo
+  fi
+
+  local omniroute_version=""
+  local verify_rc=1
+  if [[ $npm_rc -eq 0 ]] && have omniroute; then
+    set +e
+    omniroute_version="$(omniroute --version 2>&1)"
+    verify_rc=$?
+    set -e
+    omniroute_version="${omniroute_version%%$'\n'*}"
+  fi
+
+  if [[ $npm_rc -eq 0 && $verify_rc -eq 0 && -n "$omniroute_version" ]]; then
+    echo "OmniRoute: $omniroute_version"
+    echo "Binary:    $(command -v omniroute)"
+    echo "Node.js:   $(ver node --version)"
+    echo "npm:       $(ver npm --version)"
+    echo "Status:    PASS"
+
+    if [[ "$peer_warning_count" -gt 0 || "$deprecated_warning_count" -gt 0 ]]; then
+      echo
+      echo "Note: npm reported upstream dependency warnings:"
+      echo "  peer-resolution warnings: $peer_warning_count"
+      echo "  deprecated dependencies:  $deprecated_warning_count"
+      echo "These warnings did not prevent installation. See the TUI log for details."
+    fi
+
+    log "OmniRoute install PASS version=$omniroute_version npm_rc=$npm_rc peer_warnings=$peer_warning_count deprecated_warnings=$deprecated_warning_count"
+    rm -f "$npm_output"
+    echo
+    read -r -p "Press Enter to return to the TUI..." _
+    return 0
+  fi
+
+  echo "Status: FAIL"
+  echo "npm exit code: $npm_rc"
+  if have omniroute; then
+    echo "OmniRoute verification exit code: $verify_rc"
+    [[ -n "$omniroute_version" ]] && echo "OmniRoute output: $omniroute_version"
+  else
+    echo "OmniRoute binary was not found on PATH after installation."
+  fi
+  echo
+  echo "---- npm output ----"
+  cat "$npm_output"
+  log "OmniRoute install FAIL npm_rc=$npm_rc verify_rc=$verify_rc"
+  rm -f "$npm_output"
+  echo
+  read -r -p "Press Enter to return to the TUI..." _
+  return 1
 }
 
 install_codex() {
