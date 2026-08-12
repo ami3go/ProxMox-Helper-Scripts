@@ -53,6 +53,7 @@ grep -q 'APP_VERSION="0.1.3"' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q -- '--strict-allow-scripts' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q -- '--allow-scripts=' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q 'allow_scripts=.*fsevents' "$OMNIROUTE_TUI/ai-dev-tui"
+grep -Fq 'run_cmd pct set "$CTID" --cmode shell' "$OMNIROUTE_TUI/install.sh"
 
 python3 "$ROOT/scripts/validate-manifests.py"
 
