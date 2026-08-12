@@ -50,13 +50,14 @@ list_helpers() {
 search_helpers() {
   local term=${1:-}
   [[ -n $term ]] || ph_die 'Search term is required.'
-  local normalized=${term,,} found=0 manifest haystack
+  local normalized=${term,,} found=0 manifest haystack tags
   printf '%-22s %-30s %-16s %-10s %s\n' ID NAME CATEGORY VERSION DESCRIPTION
   printf '%-22s %-30s %-16s %-10s %s\n' '----------------------' '------------------------------' '----------------' '----------' '-----------'
   while IFS= read -r manifest; do
     ph_manifest_load "$manifest"
     ph_manifest_validate_loaded || continue
-    haystack="${HELPER_ID,,} ${HELPER_NAME,,} ${HELPER_CATEGORY,,} ${HELPER_TAGS,,} ${HELPER_DESCRIPTION,,}"
+    tags=${HELPER_TAGS:-}
+    haystack="${HELPER_ID,,} ${HELPER_NAME,,} ${HELPER_CATEGORY,,} ${tags,,} ${HELPER_DESCRIPTION,,}"
     [[ $haystack == *"$normalized"* ]] || continue
     printf '%-22s %-30s %-16s %-10s %s\n' \
       "$HELPER_ID" "$HELPER_NAME" "$HELPER_CATEGORY" "$HELPER_VERSION" "$HELPER_DESCRIPTION"

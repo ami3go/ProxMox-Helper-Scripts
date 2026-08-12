@@ -10,6 +10,17 @@ trap 'rm -rf "$runtime_tmp"' EXIT
 export AI_DEV_LOG_DIR="$runtime_tmp/log"
 export AI_DEV_BACKUP_ROOT="$runtime_tmp/backups"
 
+# Regression: backup_path must be safe under set -u when its optional label and
+# timestamp arguments are omitted. A same-statement local assignment used to
+# reference $path before that local value had taken effect.
+# shellcheck source=../lib/common.sh
+source "$ROOT/lib/common.sh"
+probe="$runtime_tmp/source-file"
+printf 'probe\n' >"$probe"
+backup=$(backup_path "$probe")
+[[ -f "$backup" ]] || { echo "backup_path default-argument regression" >&2; exit 1; }
+[[ "$(basename "$backup")" == "source-file" ]] || { echo "backup_path default label is incorrect" >&2; exit 1; }
+
 for file in "$ROOT/install.sh" "$ROOT/extend-existing-lxc.sh" "$ROOT"/lib/*.sh "$ROOT"/tests/*.sh; do bash -n "$file"; done
 "$ROOT/tests/state-migration-test.sh"
 "$ROOT/tests/codex-cli-test.sh"
