@@ -74,6 +74,24 @@ chmod +x "$registry_tmp/helpers/minimal/install.sh"
 PH_HELPERS_DIR="$registry_tmp/helpers" "$ROOT/bin/proxmox-helper-scripts" search minimal >/dev/null
 rm -rf "$registry_tmp"
 
+# Regression: host-provisioning inputs are later used by useradd/runuser/chown
+# and sudoers paths. Invalid values must be rejected before any package or pct
+# command can run, even when guest mode is requested.
+input_log=$(mktemp)
+if "$OMNIROUTE_TUI/install.sh" --guest --user 'bad;name' --yes >"$input_log" 2>&1; then
+  echo 'Invalid OmniRoute --user value was accepted.' >&2
+  rm -f "$input_log"
+  exit 1
+fi
+grep -q 'Invalid --user value' "$input_log"
+if "$OMNIROUTE_TUI/install.sh" --guest --ctid '12x' --yes >"$input_log" 2>&1; then
+  echo 'Invalid OmniRoute --ctid value was accepted.' >&2
+  rm -f "$input_log"
+  exit 1
+fi
+grep -q 'Invalid --ctid value' "$input_log"
+rm -f "$input_log"
+
 # Syntax-check every Python source without leaving __pycache__ artifacts in the
 # checkout. This covers repository tooling and the Internet Telemetry helper.
 python3 - "$ROOT" <<'PY'
