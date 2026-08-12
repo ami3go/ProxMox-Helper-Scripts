@@ -56,6 +56,24 @@ grep -q 'allow_scripts=.*fsevents' "$OMNIROUTE_TUI/ai-dev-tui"
 
 python3 "$ROOT/scripts/validate-manifests.py"
 
+# Regression: HELPER_TAGS is optional in manifests. Searching the launcher must
+# not trip `set -u` when a valid helper omits that optional field.
+registry_tmp=$(mktemp -d)
+mkdir -p "$registry_tmp/helpers/minimal"
+cat >"$registry_tmp/helpers/minimal/manifest.env" <<'EOF'
+HELPER_ID="minimal"
+HELPER_NAME="Minimal Helper"
+HELPER_CATEGORY="test"
+HELPER_VERSION="0.1.0"
+HELPER_DESCRIPTION="Manifest without optional tags"
+HELPER_ENTRYPOINT="install.sh"
+HELPER_TARGET="host"
+EOF
+printf '#!/usr/bin/env bash\nexit 0\n' >"$registry_tmp/helpers/minimal/install.sh"
+chmod +x "$registry_tmp/helpers/minimal/install.sh"
+PH_HELPERS_DIR="$registry_tmp/helpers" "$ROOT/bin/proxmox-helper-scripts" search minimal >/dev/null
+rm -rf "$registry_tmp"
+
 # Syntax-check every Python source without leaving __pycache__ artifacts in the
 # checkout. This covers repository tooling and the Internet Telemetry helper.
 python3 - "$ROOT" <<'PY'
