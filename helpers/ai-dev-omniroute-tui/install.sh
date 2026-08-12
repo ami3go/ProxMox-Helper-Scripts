@@ -40,6 +40,20 @@ while (($#)); do
   esac
 done
 
+# DEV_USER is passed to useradd/runuser/chown and is also used as part of a
+# sudoers filename. Restrict it to a normal portable Linux account name before
+# any guest or host-side command runs.
+if [[ ! "$DEV_USER" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+  echo "Invalid --user value: $DEV_USER" >&2
+  echo "Use 1-32 lowercase letters, digits, underscores or hyphens; the first character must be a letter or underscore." >&2
+  exit 2
+fi
+
+if [[ -n "$CTID" && ! "$CTID" =~ ^[1-9][0-9]{1,8}$ ]]; then
+  echo "Invalid --ctid value: $CTID" >&2
+  exit 2
+fi
+
 sudo_cmd() {
   if [[ "$(id -u)" -eq 0 ]]; then
     "$@"
@@ -95,7 +109,7 @@ host_create_and_provision() {
   command -v pct >/dev/null 2>&1 || { echo "pct not found; run this on a Proxmox VE host, or pass --guest." >&2; exit 1; }
 
   [[ -n "$CTID" ]] || CTID=$(host_next_ctid)
-  [[ "$CTID" =~ ^[0-9]+$ ]] || { echo "Could not determine a free CTID; pass --ctid explicitly." >&2; exit 1; }
+  [[ "$CTID" =~ ^[1-9][0-9]{1,8}$ ]] || { echo "Could not determine a valid free CTID; pass --ctid explicitly." >&2; exit 1; }
 
   local template_storage rootfs_storage bridge template_file
   template_storage=$(host_pick_storage vztmpl); : "${template_storage:=local}"
@@ -135,16 +149,28 @@ host_create_and_provision() {
 
   echo "Installing base packages inside LXC $CTID..."
   pct exec "$CTID" -- bash -lc 'apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y sudo openssh-server && systemctl enable --now ssh'
-  pct exec "$CTID" -- bash -lc "id '$DEV_USER' >/dev/null 2>&1 || useradd -m -s /bin/bash '$DEV_USER'"
-  pct exec "$CTID" -- bash -lc "printf '%s ALL=(ALL) NOPASSWD:ALL\n' '$DEV_USER' > /etc/sudoers.d/90-$DEV_USER && chmod 0440 /etc/sudoers.d/90-$DEV_USER"
+  if ! pct exec "$CTID" -- id "$DEV_USER" >/dev/null 2>&1; then
+    pct exec "$CTID" -- useradd -m -s /bin/bash "$DEV_USER"
+  fi
+  pct exec "$CTID" -- bash -c 'user=$1; printf "%s ALL=(ALL) NOPASSWD:ALL\n" "$user" >"/etc/sudoers.d/90-$user"; chmod 0440 "/etc/sudoers.d/90-$user"' _ "$DEV_USER"
 
   echo "Pushing AI Dev OmniRoute TUI into LXC $CTID..."
   local archive
   archive=$(mktemp --suffix=.tar.gz)
-  tar -czf "$archive" -C "$(dirname "$SCRIPT_DIR")" "$(basename "$SCRIPT_DIR")"
-  pct push "$CTID" "$archive" /root/ai-dev-omniroute-tui.tar.gz --perms 0600
+  if ! tar -czf "$archive" -C "$(dirname "$SCRIPT_DIR")" "$(basename "$SCRIPT_DIR")"; then
+    rm -f "$archive"
+    return 1
+  fi
+  if ! pct push "$CTID" "$archive" /root/ai-dev-omniroute-tui.tar.gz --perms 0600; then
+    rm -f "$archive"
+    return 1
+  fi
   rm -f "$archive"
-  pct exec "$CTID" -- bash -lc "rm -rf /opt/ai-dev-omniroute-tui && mkdir -p /opt/ai-dev-omniroute-tui && tar -xzf /root/ai-dev-omniroute-tui.tar.gz -C /opt/ai-dev-omniroute-tui --strip-components=1 && rm -f /root/ai-dev-omniroute-tui.tar.gz && chown -R '$DEV_USER':'$DEV_USER' /opt/ai-dev-omniroute-tui"
+  pct exec "$CTID" -- rm -rf /opt/ai-dev-omniroute-tui
+  pct exec "$CTID" -- mkdir -p /opt/ai-dev-omniroute-tui
+  pct exec "$CTID" -- tar -xzf /root/ai-dev-omniroute-tui.tar.gz -C /opt/ai-dev-omniroute-tui --strip-components=1
+  pct exec "$CTID" -- rm -f /root/ai-dev-omniroute-tui.tar.gz
+  pct exec "$CTID" -- chown -R "$DEV_USER:$DEV_USER" /opt/ai-dev-omniroute-tui
 
   echo "Installing AI Dev OmniRoute TUI as $DEV_USER..."
   pct exec "$CTID" -- runuser -u "$DEV_USER" -- /opt/ai-dev-omniroute-tui/install.sh --guest
@@ -154,7 +180,9 @@ host_create_and_provision() {
   echo
   echo "LXC $CTID (ai-dev-omniroute) is ready."
   echo "  Console: pct enter $CTID , then: su - $DEV_USER"
-  [[ -n "$ip" ]] && echo "  SSH:     ssh ${DEV_USER}@${ip}"
+  if [[ -n "$ip" ]]; then
+    echo "  SSH:     ssh ${DEV_USER}@${ip} (configure a password or SSH key first)"
+  fi
   echo "  Then run: ai-dev-tui"
 }
 

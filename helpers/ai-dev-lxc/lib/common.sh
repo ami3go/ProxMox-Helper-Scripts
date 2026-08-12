@@ -43,7 +43,10 @@ shell_quote() { printf '%q' "$1"; }
 timestamp() { date +%Y%m%d-%H%M%S; }
 
 backup_path() {
-  local path=$1 label=${2:-$(basename "$path")} stamp=${3:-$(timestamp)}
+  local path label stamp
+  path=$1
+  label=${2:-$(basename "$path")}
+  stamp=${3:-$(timestamp)}
   local dest="$AI_DEV_BACKUP_ROOT/$stamp/$label"
   [[ -e "$path" ]] || return 0
   install -d -m 0700 "$(dirname "$dest")"
