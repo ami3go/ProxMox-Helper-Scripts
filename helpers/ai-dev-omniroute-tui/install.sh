@@ -27,6 +27,10 @@ The installer is intentionally verbose: each meaningful step and command is
 printed to the console and command output is streamed live. Only short polling
 and existence probes are kept quiet.
 
+New and existing OmniRoute containers are configured with Proxmox `cmode=shell`
+so the web UI Console opens a direct container shell without depending on a
+login/getty prompt.
+
   --ctid ID     Create/use this specific CTID instead of auto-allocating one
   --user NAME   Non-root user created inside the new LXC (default: dev)
   --yes         Skip the confirmation prompt before creating the LXC
@@ -195,6 +199,7 @@ host_create_and_provision() {
     echo "  Template:   ${template_storage}:vztmpl/${template_file}"
     echo "  Resources:  2 cores / 2048 MB RAM / 512 MB swap / 8 GB disk on $rootfs_storage"
     echo "  Network:    DHCP on $bridge"
+    echo "  Console:    Proxmox direct shell"
     echo "  Dev user:   $DEV_USER (passwordless sudo)"
     echo
     if ! $ASSUME_YES; then
@@ -212,6 +217,10 @@ host_create_and_provision() {
       --features nesting=1,keyctl=1 \
       --onboot 1
   fi
+
+  step "Configure Proxmox web console for direct shell"
+  run_cmd pct set "$CTID" --cmode shell
+  info "LXC $CTID console mode is 'shell'; Proxmox Console opens a direct root shell."
 
   step "Ensure LXC $CTID is running"
   local ct_status
@@ -272,6 +281,7 @@ host_create_and_provision() {
 
   echo
   echo "LXC $CTID (ai-dev-omniroute) is ready."
+  echo "  Proxmox: open LXC $CTID -> Console (direct root shell)"
   echo "  Console: pct enter $CTID , then: su - $DEV_USER"
   if [[ -n "$ip" ]]; then
     echo "  SSH:     ssh ${DEV_USER}@${ip} (configure a password or SSH key first)"
