@@ -159,3 +159,43 @@ does not require one, only `HELPERS.md`/root `README.md` need a pointer).
 `pct exec ... bash -lc '...'` diagnostic calls), port conflicts between the
 four services, idempotency of the finalize pass (safe to re-run), and that
 `--yes` mode truly never blocks on a prompt.
+
+## Docker-free variant: `ai-dev-claude-no-docker.sh`
+
+Real-world use turned up a recurring, sometimes hard-to-diagnose class of
+failure: Docker inside a nested/unprivileged LXC (needs `nesting=1,keyctl=1`,
+sometimes needs the `vfs` storage-driver fallback, and separately — the bug
+that motivated this variant in the first place — Debian 13's `docker.io`
+package only *Recommends* `docker-cli` rather than depending on it, so a
+`--no-install-recommends` install starts a perfectly healthy daemon with no
+`docker` command on PATH at all). Two of the six installed pieces were the
+only ones that actually needed Docker: Termix (web SSH terminal) and Homepage
+(dashboard). This variant drops Docker entirely by swapping those two:
+
+- **Termix → [ttyd](https://github.com/tsl0922/ttyd)**: a single static Go
+  binary (arch-specific asset, e.g. `ttyd.x86_64`, downloaded via GitHub's
+  release API with a checksum comparison against the release's
+  `SHA256SUMS`), run as a systemd service wrapping `login` in the browser
+  terminal. It runs as root (required for `login` to switch users) with
+  `--writable` (ttyd defaults to read-only) and HTTP Basic Auth (`-c`) as a
+  first authentication layer in front of the real Linux login prompt.
+  Termix itself was ruled out for a from-source non-Docker install: it's a
+  Node.js ≥22 app needing native module compilation (`better-sqlite3`,
+  `serialport`) with no documented bare-metal install path, only
+  Docker/desktop-app distribution.
+- **Homepage → static HTML + `python3 -m http.server`**: since the actual
+  requirement is just "collect the links in one place," a generated static
+  page (inline CSS, no external assets/fonts) removes the Next.js runtime
+  entirely. Served by Python's standard-library HTTP server (already
+  installed as a stage-1 base package, so no new dependency) running as
+  `nobody` under systemd. `dashboard-refresh` rewrites the page directly —
+  no restart needed, since static files are read fresh per request.
+
+Everything else — code-server, FileBrowser Quantum, GitHub CLI, Claude
+Code, the whiptail TUI framework, host-side container creation, the
+reboot+finalize flow, and the OmniRoute-connect menu action — is identical
+in structure to `ai-dev-claude.sh`, adapted only for the renamed
+ports/services (`TERMIX_PORT`→`WEB_TERMINAL_PORT`,
+`HOMEPAGE_PORT`→`DASHBOARD_PORT`) and one genuine simplification: the LXC
+no longer needs `--features nesting=1,keyctl=1` at all, since nothing in
+this variant runs inside a container-in-a-container.

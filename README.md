@@ -40,11 +40,11 @@ See [`helpers/ai-dev-omniroute-tui/README.md`](helpers/ai-dev-omniroute-tui/READ
 
 ## AI Dev Claude
 
-Creates and provisions a new LXC sized for Claude Code development: a web IDE (code-server), a web file manager (FileBrowser Quantum), Termix, a Homepage dashboard linking all three, GitHub CLI, and Claude Code. Verbose, step-by-step by default; `--yes` for a fully unattended run.
+Creates and provisions a new LXC sized for Claude Code development: a web IDE (code-server), a web file manager (FileBrowser Quantum), a web terminal, a dashboard linking all three, GitHub CLI, and Claude Code. Verbose, step-by-step by default; `--yes` for a fully unattended run. `ai-dev-claude-no-docker.sh` is a Docker-free variant (ttyd + a static dashboard instead of Termix/Homepage, no `nesting`/`keyctl` LXC features needed).
 
 ```bash
 sudo ./helpers/ai-dev-claude/ai-dev-claude.sh
-sudo ./helpers/ai-dev-claude/ai-dev-claude.sh --yes
+sudo ./helpers/ai-dev-claude/ai-dev-claude-no-docker.sh
 ```
 
 See [`helpers/ai-dev-claude/README.md`](helpers/ai-dev-claude/README.md) for what gets installed and what's still manual, and [`helpers/ai-dev-claude/PLAN.md`](helpers/ai-dev-claude/PLAN.md) for the design.
