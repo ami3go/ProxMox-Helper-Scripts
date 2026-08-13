@@ -15,7 +15,7 @@ set -Eeuo pipefail
 shopt -s inherit_errexit 2>/dev/null || true
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_VERSION="0.1.0"
+readonly SCRIPT_VERSION="0.1.1"
 readonly BACKTITLE="AI Dev Claude (No Docker) • Proxmox VE"
 readonly STATE_DIR="/etc/ai-dev-claude"
 readonly LOG_DIR="/var/log/ai-dev-claude"
@@ -350,9 +350,46 @@ Create LXC $CTID now?" 28 88
 
 # ---------- Container creation ----------
 
+rootfs_size_gib() {
+  local rootfs_line size number unit
+  rootfs_line=$(pct config "$CTID" 2>/dev/null | awk -F': ' '$1=="rootfs"{print $2; exit}')
+  size=$(sed -nE 's/(^|.*,)(size=)([0-9]+)([KMGT])($|,.*)/\3\4/p' <<<"$rootfs_line")
+  [[ -n "$size" ]] || return 1
+  number=${size%?}
+  unit=${size: -1}
+  case "$unit" in
+    T) echo $((number * 1024)) ;;
+    G) echo "$number" ;;
+    M) echo $(((number + 1023) / 1024)) ;;
+    K) echo 1 ;;
+    *) return 1 ;;
+  esac
+}
+
+ensure_existing_rootfs_size() {
+  local current_gib
+  current_gib=$(rootfs_size_gib || true)
+  if [[ -z "$current_gib" ]]; then
+    say "WARNING: could not determine LXC $CTID rootfs size from pct config; guest free-space preflight will enforce capacity."
+    return 0
+  fi
+  if ((current_gib >= DISK_SIZE)); then
+    say "Existing LXC $CTID rootfs is ${current_gib} GiB; requested minimum is ${DISK_SIZE} GiB."
+    return 0
+  fi
+
+  say "Expanding existing LXC $CTID rootfs from ${current_gib} GiB to ${DISK_SIZE} GiB before provisioning..."
+  if ! pct resize "$CTID" rootfs "${DISK_SIZE}G" >>"$LOG_FILE" 2>&1; then
+    show_error_details "Could not grow LXC $CTID rootfs to ${DISK_SIZE} GiB. Free storage on the Proxmox node or choose a larger rootfs storage, then retry."
+    exit 1
+  fi
+  say "LXC $CTID rootfs expansion completed."
+}
+
 create_container() {
   if pct status "$CTID" >/dev/null 2>&1; then
     say "LXC $CTID already exists; re-provisioning it in place."
+    ensure_existing_rootfs_size
     return 0
   fi
   ensure_template_downloaded
@@ -415,8 +452,53 @@ set -Eeuo pipefail
 source /root/ai-dev-claude.env
 DEV_HOME="/home/$DEV_USER"
 PROVISION_STARTED_AT=$(date -Is)
+readonly MIN_FREE_ROOT_KIB=$((2 * 1024 * 1024))
 
 stage() { printf '\n==== [%s] %s ====\n' "$(date +%T)" "$1"; }
+
+# pct exec can inherit a host locale that a minimal Debian template does
+# not have generated. C.UTF-8 is built in and avoids noisy locale warnings.
+export LANG=C.UTF-8
+export LC_ALL=C.UTF-8
+
+root_free_kib() { df -Pk / | awk 'NR==2{print $4}'; }
+
+show_disk_state() {
+  echo "Root filesystem:"
+  df -h / || true
+  echo "Apt/dpkg temporary paths:"
+  du -sh /var/cache/apt /var/lib/apt/lists /tmp 2>/dev/null || true
+}
+
+ensure_root_free_space() {
+  local free_kib free_mib="unknown"
+  free_kib=$(root_free_kib)
+  if [[ "$free_kib" =~ ^[0-9]+$ ]]; then
+    free_mib=$((free_kib / 1024))
+  fi
+  if [[ ! "$free_kib" =~ ^[0-9]+$ ]] || ((free_kib < MIN_FREE_ROOT_KIB)); then
+    echo "ERROR: insufficient free space on the LXC root filesystem before package installation." >&2
+    echo "Required free space: at least 2 GiB; available: ${free_mib} MiB." >&2
+    show_disk_state >&2
+    echo "If this is an existing CT, rerun this host helper so it can grow rootfs to the requested size, or resize it manually with: pct resize <CTID> rootfs <SIZE>G" >&2
+    exit 1
+  fi
+}
+
+cleanup_package_cache() {
+  rm -rf /tmp/apt-dpkg-install-* /var/cache/apt/archives/partial/* 2>/dev/null || true
+  apt-get clean || true
+}
+
+repair_package_state() {
+  # ENOSPC can leave packages unpacked but not configured. First try to
+  # configure what is already present, let apt repair dependencies, then
+  # require dpkg to be fully consistent before continuing.
+  dpkg --configure -a || true
+  apt-get -f install -y --no-install-recommends
+  dpkg --configure -a
+  cleanup_package_cache
+}
 
 # Written first, not at the end: dashboard-refresh (stage 5) and the other
 # helper commands installed later all source this, and stage 5 calls
@@ -434,12 +516,19 @@ chmod 0644 /etc/ai-dev-claude.env
 
 stage "1/8: Base packages, development user, SSH, workspace"
 export DEBIAN_FRONTEND=noninteractive
+show_disk_state
+cleanup_package_cache
+ensure_root_free_space
+repair_package_state
+ensure_root_free_space
 apt-get update
-apt-get -y upgrade
-apt-get install -y \
+ensure_root_free_space
+apt-get install -y --no-install-recommends \
   sudo openssh-server ca-certificates curl wget git gh gnupg lsb-release \
   build-essential python3 python3-pip unzip zip jq tmux nano vim ripgrep \
   apt-transport-https
+cleanup_package_cache
+show_disk_state
 systemctl enable --now ssh
 
 id "$DEV_USER" >/dev/null 2>&1 || useradd -m -s /bin/bash "$DEV_USER"
@@ -829,6 +918,7 @@ install_claude_code() {
   printf 'deb [signed-by=/etc/apt/keyrings/claude-code.asc] https://downloads.claude.ai/claude-code/apt/stable stable main\n' >"$source_file"
   timeout --foreground 15m apt-get update
   timeout --foreground 30m apt-get install -y --no-install-recommends claude-code
+  apt-get clean
   runuser -u "$DEV_USER" -- claude --version
 }
 install_claude_code
