@@ -1795,8 +1795,11 @@ start_docker_once() {
 }
 
 install_termix() {
+  # docker.io on Debian 13 only Recommends docker-cli (not a hard Depends), so
+  # --no-install-recommends alone would leave dockerd running with no `docker`
+  # CLI on PATH at all. Name docker-cli explicitly so it installs regardless.
   timeout --foreground 30m apt-get install -y --no-install-recommends \
-    docker.io docker-compose
+    docker.io docker-cli docker-compose
   systemctl enable docker.service containerd.service >/dev/null
 
   # Debian may start Docker from the package post-install script. Readiness is

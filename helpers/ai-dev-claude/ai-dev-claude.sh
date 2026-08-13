@@ -602,7 +602,11 @@ verify_filebrowser() {
 verify_filebrowser
 
 stage "4/8: Installing and verifying Termix (web SSH terminal) and Docker"
-apt-get install -y --no-install-recommends docker.io docker-compose
+# docker.io on Debian 13 only Recommends docker-cli (not a hard Depends), so
+# --no-install-recommends alone leaves dockerd running with no `docker` CLI on
+# PATH at all: the daemon answers /_ping fine while every `docker` invocation
+# fails "command not found". Name docker-cli explicitly so it always installs.
+apt-get install -y --no-install-recommends docker.io docker-cli docker-compose
 systemctl enable --now docker.service containerd.service
 hash -r
 
@@ -630,7 +634,7 @@ docker_diagnostics() {
 if ! docker_ready; then
   echo "Docker not ready yet; checking service state and CLI resolution before retrying..." >&2
   systemctl status docker.service --no-pager >&2 || true
-  command -v docker >/dev/null 2>&1 || { echo "docker CLI not found on PATH; reinstalling docker.io." >&2; apt-get install -y --reinstall docker.io; hash -r; }
+  command -v docker >/dev/null 2>&1 || { echo "docker CLI not found on PATH; installing docker-cli." >&2; apt-get install -y docker-cli; hash -r; }
   if ! docker_ready; then
     echo "Docker still not ready; applying the vfs storage-driver fallback (common in nested/unprivileged LXCs)." >&2
     systemctl stop docker.service docker.socket 2>/dev/null || true
