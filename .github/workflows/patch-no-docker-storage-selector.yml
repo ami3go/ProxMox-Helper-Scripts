@@ -1,4 +1,4 @@
-name: Temporary no-Docker storage selector patch
+name: Temporary no-Docker storage selector cleanup
 
 on:
   push:
@@ -8,173 +8,20 @@ permissions:
   contents: write
 
 jobs:
-  patch:
-    if: github.event.head_commit.message == 'Apply no-docker storage selector patch'
+  cleanup:
+    if: github.event.head_commit.message == 'Cleanup no-docker storage selector workflow'
     runs-on: ubuntu-latest
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-
-      - name: Patch storage selection
+      - name: Remove temporary patch files
         run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          path = Path('helpers/ai-dev-claude/ai-dev-claude-no-docker.sh')
-          text = path.read_text()
-
-          def replace_once(old: str, new: str) -> None:
-              global text
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'Expected exactly one match, found {count}: {old[:120]!r}')
-              text = text.replace(old, new, 1)
-
-          replace_once('readonly SCRIPT_VERSION="0.1.1"', 'readonly SCRIPT_VERSION="0.1.2"')
-
-          replace_once(
-          '''select_default_storage() {
-            local preferred=$1; shift
-            local entry
-            for entry in "$@"; do [[ "$entry" == "$preferred" ]] && { printf '%s' "$entry"; return; }; done
-            printf '%s' "${1:-}"
-          }
-
-          ensure_template_downloaded() {
-          ''',
-          '''select_default_storage() {
-            local preferred=$1; shift
-            local entry
-            for entry in "$@"; do [[ "$entry" == "$preferred" ]] && { printf '%s' "$entry"; return; }; done
-            printf '%s' "${1:-}"
-          }
-
-          rootfs_storage_description() {
-            local storage=$1 type available used_pct
-            read -r type available used_pct < <(
-              pvesm status --content rootdir 2>/dev/null \
-                | awk -v storage="$storage" 'NR>1 && $1==storage {print $2, $6, $7; exit}'
-            ) || true
-            [[ -n "${type:-}" ]] || type="unknown"
-            [[ -n "${available:-}" ]] || available="unknown"
-            [[ -n "${used_pct:-}" ]] || used_pct="unknown"
-            printf 'type=%s, free=%s KiB, used=%s' "$type" "$available" "$used_pct"
-          }
-
-          existing_rootfs_storage() {
-            pct config "$CTID" 2>/dev/null \
-              | awk -F': ' '$1=="rootfs" {split($2, parts, ":"); print parts[1]; exit}'
-          }
-
-          choose_rootfs_storage_for_new_container() {
-            local storage selected description
-            local -a menu_items=()
-
-            if pct status "$CTID" >/dev/null 2>&1; then
-              storage=$(existing_rootfs_storage || true)
-              if [[ -n "$storage" ]]; then
-                ROOTFS_STORAGE="$storage"
-                say "Existing LXC $CTID stays on rootfs storage: $ROOTFS_STORAGE"
-              fi
-              return 0
-            fi
-
-            if ((${#rootfs_storages[@]} == 0)); then
-              show_error_details "No active Proxmox storage accepting LXC rootdir content was found."
-              exit 1
-            fi
-
-            if $ASSUME_YES; then
-              say "Non-interactive mode: using automatically selected rootfs storage '$ROOTFS_STORAGE' for new LXC $CTID."
-              return 0
-            fi
-
-            for storage in "${rootfs_storages[@]}"; do
-              description=$(rootfs_storage_description "$storage")
-              menu_items+=("$storage" "$description")
-            done
-
-            selected=$(whiptail --backtitle "$BACKTITLE" --title "CONTAINER STORAGE" \
-              --default-item "$ROOTFS_STORAGE" --menu \
-              "Select where the new LXC root disk will be stored.\n\nOnly active Proxmox storages that accept LXC rootdir content are listed." \
-              20 92 10 "${menu_items[@]}" 3>&1 1>&2 2>&3) || exit 0
-            ROOTFS_STORAGE="$selected"
-            say "Selected rootfs storage '$ROOTFS_STORAGE' for new LXC $CTID."
-          }
-
-          ensure_template_downloaded() {
-          ''')
-
-          replace_once(
-          '''  TEMPLATE_STORAGE=$(select_default_storage local "${template_storages[@]}"); [[ -n "$TEMPLATE_STORAGE" ]] || TEMPLATE_STORAGE="local"
-            ROOTFS_STORAGE=$(select_default_storage local-lvm "${rootfs_storages[@]}"); [[ -n "$ROOTFS_STORAGE" ]] || ROOTFS_STORAGE="local-lvm"
-            BRIDGE=$(select_default_storage vmbr0 "${bridges[@]}"); [[ -n "$BRIDGE" ]] || BRIDGE="vmbr0"
-
-            if ! $ASSUME_YES; then
-          ''',
-          '''  TEMPLATE_STORAGE=$(select_default_storage local "${template_storages[@]}"); [[ -n "$TEMPLATE_STORAGE" ]] || TEMPLATE_STORAGE="local"
-            ROOTFS_STORAGE=$(select_default_storage local-lvm "${rootfs_storages[@]}"); [[ -n "$ROOTFS_STORAGE" ]] || ROOTFS_STORAGE="local-lvm"
-            BRIDGE=$(select_default_storage vmbr0 "${bridges[@]}"); [[ -n "$BRIDGE" ]] || BRIDGE="vmbr0"
-
-            choose_rootfs_storage_for_new_container
-
-            if ! $ASSUME_YES; then
-          ''')
-
-          path.write_text(text)
-
-          readme = Path('helpers/ai-dev-claude/README.md')
-          rtext = readme.read_text()
-          old = '''Interactive by default: confirms defaults, or lets you customize hostname,
-          dev username, CPU/RAM/swap/disk, and every service port before creating
-          anything. Every install step streams its real output live to the terminal
-          '''
-          new = '''Interactive by default: for every new container, first asks which active
-          Proxmox `rootdir` storage should hold the LXC root disk, then confirms defaults
-          or lets you customize hostname, dev username, CPU/RAM/swap/disk, and every
-          service port before creating anything. Re-provisioning an existing CT keeps
-          its current storage. Every install step streams its real output live to the terminal
-          '''
-          if rtext.count(old) != 1:
-              raise SystemExit('README insertion point did not match exactly once')
-          readme.write_text(rtext.replace(old, new, 1))
-
-          validate = Path('scripts/validate.sh')
-          vtext = validate.read_text()
-          vtext = vtext.replace(
-              'grep -q \'SCRIPT_VERSION="0.1.1"\' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"',
-              'grep -q \'SCRIPT_VERSION="0.1.2"\' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"',
-              1,
-          )
-          marker = '''grep -q 'repair_package_state' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
-          '''
-          addition = '''grep -q 'repair_package_state' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
-          grep -q 'choose_rootfs_storage_for_new_container' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
-          grep -q 'CONTAINER STORAGE' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
-          grep -q 'pvesm status --content rootdir' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
-          '''
-          if vtext.count(marker) != 1:
-              raise SystemExit('validate.sh insertion point did not match exactly once')
-          validate.write_text(vtext.replace(marker, addition, 1))
-          PY
-
-      - name: Install validation tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install --yes shellcheck zip python3-pil python3-yaml
-
-      - name: Validate repository
-        run: sudo -E ./scripts/validate.sh
-
-      - name: Build release package
-        run: OUT_DIR=dist sudo -E ./scripts/package-release.sh
-
-      - name: Commit patch
-        run: |
+          rm -f .github/workflows/patch-no-docker-storage-selector.yml
+          rm -f TEMP_STORAGE_SELECTOR_TRIGGER.txt
+          rm -f TEMP_STORAGE_SELECTOR_CLEANUP_TRIGGER.txt
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add helpers/ai-dev-claude/ai-dev-claude-no-docker.sh helpers/ai-dev-claude/README.md scripts/validate.sh
-          git commit -m 'Prompt for LXC storage on new no-Docker containers'
+          git add -A
+          git commit -m 'Clean up temporary storage selector workflow'
           git push origin HEAD:main
