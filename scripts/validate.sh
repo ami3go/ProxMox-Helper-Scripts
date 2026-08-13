@@ -54,10 +54,13 @@ grep -q -- '--strict-allow-scripts' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q -- '--allow-scripts=' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q 'allow_scripts=.*fsevents' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -Fq 'run_cmd pct set "$CTID" --cmode shell' "$OMNIROUTE_TUI/install.sh"
-grep -q 'SCRIPT_VERSION="0.1.1"' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
+grep -q 'SCRIPT_VERSION="0.1.2"' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
 grep -Fq 'pct resize "$CTID" rootfs "${DISK_SIZE}G"' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
 grep -q 'MIN_FREE_ROOT_KIB' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
 grep -q 'repair_package_state' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
+grep -q 'choose_rootfs_storage_for_new_container' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
+grep -q 'CONTAINER STORAGE' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
+grep -q 'pvesm status --content rootdir' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
 if grep -q '^apt-get -y upgrade$' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"; then
   echo 'No-Docker helper must not perform an unconditional full apt upgrade during provisioning.' >&2
   exit 1

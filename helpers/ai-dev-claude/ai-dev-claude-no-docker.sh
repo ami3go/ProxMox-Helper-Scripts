@@ -15,7 +15,7 @@ set -Eeuo pipefail
 shopt -s inherit_errexit 2>/dev/null || true
 
 readonly SCRIPT_NAME="$(basename "$0")"
-readonly SCRIPT_VERSION="0.1.1"
+readonly SCRIPT_VERSION="0.1.2"
 readonly BACKTITLE="AI Dev Claude (No Docker) • Proxmox VE"
 readonly STATE_DIR="/etc/ai-dev-claude"
 readonly LOG_DIR="/var/log/ai-dev-claude"
@@ -224,6 +224,56 @@ select_default_storage() {
   printf '%s' "${1:-}"
 }
 
+rootfs_storage_description() {
+  local storage=$1 type available used_pct
+  read -r type available used_pct < <(
+    pvesm status --content rootdir 2>/dev/null       | awk -v storage="$storage" 'NR>1 && $1==storage {print $2, $6, $7; exit}'
+  ) || true
+  [[ -n "${type:-}" ]] || type="unknown"
+  [[ -n "${available:-}" ]] || available="unknown"
+  [[ -n "${used_pct:-}" ]] || used_pct="unknown"
+  printf 'type=%s, free=%s KiB, used=%s' "$type" "$available" "$used_pct"
+}
+
+existing_rootfs_storage() {
+  pct config "$CTID" 2>/dev/null     | awk -F': ' '$1=="rootfs" {split($2, parts, ":"); print parts[1]; exit}'
+}
+
+choose_rootfs_storage_for_new_container() {
+  local storage selected description
+  local -a menu_items=()
+
+  if pct status "$CTID" >/dev/null 2>&1; then
+    storage=$(existing_rootfs_storage || true)
+    if [[ -n "$storage" ]]; then
+      ROOTFS_STORAGE="$storage"
+      say "Existing LXC $CTID stays on rootfs storage: $ROOTFS_STORAGE"
+    fi
+    return 0
+  fi
+
+  if ((${#rootfs_storages[@]} == 0)); then
+    show_error_details "No active Proxmox storage accepting LXC rootdir content was found."
+    exit 1
+  fi
+
+  if $ASSUME_YES; then
+    say "Non-interactive mode: using automatically selected rootfs storage '$ROOTFS_STORAGE' for new LXC $CTID."
+    return 0
+  fi
+
+  for storage in "${rootfs_storages[@]}"; do
+    description=$(rootfs_storage_description "$storage")
+    menu_items+=("$storage" "$description")
+  done
+
+  selected=$(whiptail --backtitle "$BACKTITLE" --title "CONTAINER STORAGE"     --default-item "$ROOTFS_STORAGE" --menu     "Select where the new LXC root disk will be stored.
+
+Only active Proxmox storages that accept LXC rootdir content are listed."     20 92 10 "${menu_items[@]}" 3>&1 1>&2 2>&3) || exit 0
+  ROOTFS_STORAGE="$selected"
+  say "Selected rootfs storage '$ROOTFS_STORAGE' for new LXC $CTID."
+}
+
 ensure_template_downloaded() {
   local arch
   arch=$(dpkg --print-architecture 2>/dev/null || echo amd64)
@@ -280,6 +330,8 @@ gather_configuration() {
   TEMPLATE_STORAGE=$(select_default_storage local "${template_storages[@]}"); [[ -n "$TEMPLATE_STORAGE" ]] || TEMPLATE_STORAGE="local"
   ROOTFS_STORAGE=$(select_default_storage local-lvm "${rootfs_storages[@]}"); [[ -n "$ROOTFS_STORAGE" ]] || ROOTFS_STORAGE="local-lvm"
   BRIDGE=$(select_default_storage vmbr0 "${bridges[@]}"); [[ -n "$BRIDGE" ]] || BRIDGE="vmbr0"
+
+  choose_rootfs_storage_for_new_container
 
   if ! $ASSUME_YES; then
     if ! ask_yes_no "AI DEV CLAUDE (NO DOCKER)" \

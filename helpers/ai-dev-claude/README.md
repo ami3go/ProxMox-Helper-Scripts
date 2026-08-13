@@ -24,9 +24,11 @@ source of pain — see the "Docker-free variant" section of `PLAN.md`.
 sudo ./ai-dev-claude.sh
 ```
 
-Interactive by default: confirms defaults, or lets you customize hostname,
-dev username, CPU/RAM/swap/disk, and every service port before creating
-anything. Every install step streams its real output live to the terminal
+Interactive by default: for every new container, first asks which active
+Proxmox `rootdir` storage should hold the LXC root disk, then confirms defaults
+or lets you customize hostname, dev username, CPU/RAM/swap/disk, and every
+service port before creating anything. Re-provisioning an existing CT keeps
+its current storage. Every install step streams its real output live to the terminal
 (and to a log under `/var/log/ai-dev-claude/`) — nothing is hidden behind a
 progress bar.
 
