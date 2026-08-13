@@ -416,6 +416,20 @@ PROVISION_STARTED_AT=$(date -Is)
 
 stage() { printf '\n==== [%s] %s ====\n' "$(date +%T)" "$1"; }
 
+# Written first, not at the end: homepage-refresh (stage 5) and the other
+# helper commands installed later all source this, and stage 5 calls
+# homepage-refresh immediately after writing it. Every value here is
+# already known from /root/ai-dev-claude.env and never changes during
+# provisioning, so there's no reason to defer it.
+cat >/etc/ai-dev-claude.env <<EOF
+DEV_USER=$DEV_USER
+CODE_SERVER_PORT=$CODE_SERVER_PORT
+FILE_MANAGER_PORT=$FILE_MANAGER_PORT
+TERMIX_PORT=$TERMIX_PORT
+HOMEPAGE_PORT=$HOMEPAGE_PORT
+EOF
+chmod 0644 /etc/ai-dev-claude.env
+
 stage "1/8: Base packages, development user, SSH, workspace"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
@@ -788,14 +802,6 @@ install_claude_code() {
 install_claude_code
 
 stage "8/8: Installing helper commands (status, menu, OmniRoute connect)"
-cat >/etc/ai-dev-claude.env <<EOF
-DEV_USER=$DEV_USER
-CODE_SERVER_PORT=$CODE_SERVER_PORT
-FILE_MANAGER_PORT=$FILE_MANAGER_PORT
-TERMIX_PORT=$TERMIX_PORT
-HOMEPAGE_PORT=$HOMEPAGE_PORT
-EOF
-chmod 0644 /etc/ai-dev-claude.env
 
 cat >/usr/local/bin/claude-dev-status <<'STATUS'
 #!/usr/bin/env bash
