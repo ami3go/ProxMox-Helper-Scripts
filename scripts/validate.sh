@@ -4,6 +4,8 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 HELPER="$ROOT/helpers/ai-dev-lxc"
 OMNIROUTE_TUI="$ROOT/helpers/ai-dev-omniroute-tui"
 TELEMETRY="$ROOT/helpers/internet-telemetry"
+CLAUDE_NO_DOCKER="$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
+CLAUDE_NO_DOCKER_PROXY="$ROOT/helpers/ai-dev-claude/no_docker_proxy_ai-dev-claude.sh"
 
 "$HELPER/tests/smoke.sh"
 
@@ -54,15 +56,39 @@ grep -q -- '--strict-allow-scripts' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q -- '--allow-scripts=' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -q 'allow_scripts=.*fsevents' "$OMNIROUTE_TUI/ai-dev-tui"
 grep -Fq 'run_cmd pct set "$CTID" --cmode shell' "$OMNIROUTE_TUI/install.sh"
-grep -q 'SCRIPT_VERSION="0.1.2"' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
-grep -Fq 'pct resize "$CTID" rootfs "${DISK_SIZE}G"' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
-grep -q 'MIN_FREE_ROOT_KIB' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
-grep -q 'repair_package_state' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
-grep -q 'choose_rootfs_storage_for_new_container' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
-grep -q 'CONTAINER STORAGE' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
-grep -q 'pvesm status --content rootdir' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"
-if grep -q '^apt-get -y upgrade$' "$ROOT/helpers/ai-dev-claude/ai-dev-claude-no-docker.sh"; then
+
+# Claude no-Docker base helper regressions.
+grep -q 'SCRIPT_VERSION="0.1.2"' "$CLAUDE_NO_DOCKER"
+grep -Fq 'pct resize "$CTID" rootfs "${DISK_SIZE}G"' "$CLAUDE_NO_DOCKER"
+grep -q 'MIN_FREE_ROOT_KIB' "$CLAUDE_NO_DOCKER"
+grep -q 'repair_package_state' "$CLAUDE_NO_DOCKER"
+grep -q 'choose_rootfs_storage_for_new_container' "$CLAUDE_NO_DOCKER"
+grep -q 'CONTAINER STORAGE' "$CLAUDE_NO_DOCKER"
+grep -q 'pvesm status --content rootdir' "$CLAUDE_NO_DOCKER"
+if grep -q '^apt-get -y upgrade$' "$CLAUDE_NO_DOCKER"; then
   echo 'No-Docker helper must not perform an unconditional full apt upgrade during provisioning.' >&2
+  exit 1
+fi
+
+# Proxy/SSO overlay regressions. Protect the design invariant that all web
+# backends are local-only and a single Authelia session is the auth boundary.
+grep -q 'SCRIPT_VERSION="0.1.0"' "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq 'readonly BASE_HELPER="$SCRIPT_DIR/ai-dev-claude-no-docker.sh"' "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq 'forward_auth 127.0.0.1:9091' "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq 'uri /api/authz/forward-auth' "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq 'copy_headers Remote-User Remote-Groups Remote-Email Remote-Name' "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq 'tls internal' "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq 'bind-addr: 127.0.0.1:$CODE_SERVER_PORT' "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq 'auth: none' "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq "header: 'Remote-User'" "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq 'enabled: false' "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq -- '--auth-header Remote-User' "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq -- '--interface 127.0.0.1' "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq 'AUTHELIA_KEY_FINGERPRINT="192085915BD608A458AC58DCE461FA1531286EEA"' "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq 'no_docker_proxy_${CTID}.env' "$CLAUDE_NO_DOCKER_PROXY"
+grep -Fq 'caddy-local-root-${CTID}.crt' "$CLAUDE_NO_DOCKER_PROXY"
+if grep -Eq 'docker(\.io|-compose| compose| run| pull)' "$CLAUDE_NO_DOCKER_PROXY"; then
+  echo 'Proxy/SSO helper must remain Docker-free.' >&2
   exit 1
 fi
 
